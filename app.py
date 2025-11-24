@@ -16,7 +16,6 @@ st.markdown("""
 <style>
     .search-result { background-color: #f0f2f6; padding: 10px; border-radius: 5px; margin-bottom: 10px; border-left: 4px solid #ff4b4b; }
     .highlight { background-color: #ffffcc; font-weight: bold; padding: 2px 4px; border-radius: 3px; color: #333; }
-    /* Ajuste para que el formulario de búsqueda se vea compacto */
     .stForm { border: none; padding: 0; }
 </style>
 """, unsafe_allow_html=True)
@@ -28,7 +27,7 @@ if "transcript_segments" not in st.session_state: st.session_state.transcript_se
 if "audio_path" not in st.session_state: st.session_state.audio_path = None
 if "audio_start_time" not in st.session_state: st.session_state.audio_start_time = 0
 if "chat_history" not in st.session_state: st.session_state.chat_history = []
-if "search_results" not in st.session_state: st.session_state.search_results = None # Guardamos resultados para persistencia
+if "search_results" not in st.session_state: st.session_state.search_results = None
 
 # --- UTILIDADES ---
 def format_timestamp(seconds):
@@ -56,74 +55,41 @@ def get_groq_client():
     try: return Groq(api_key=st.secrets["general"]["groq_api_key"])
     except: return None
 
-# --- PROCESAMIENTO ROBUSTO DE ARCHIVOS ---
+# --- PROCESAMIENTO DE ARCHIVOS (ROBUSTO) ---
 def process_audio_file(uploaded_file):
-    """
-    Gestión manual de archivos temporales para evitar errores de 'No such file'.
-    Soporta archivos grandes (>100MB).
-    """
     try:
-        # 1. Definir rutas explícitas en el directorio temporal del sistema
         temp_dir = tempfile.gettempdir()
-        # Limpiamos el nombre de espacios para evitar problemas con FFmpeg
         safe_name = "".join([c for c in uploaded_file.name if c.isalnum() or c in ('.','_')]).strip()
         input_path = os.path.join(temp_dir, f"input_{safe_name}")
         output_path = os.path.join(temp_dir, f"processed_{os.path.splitext(safe_name)[0]}.mp3")
 
-        # 2. Escribir el archivo de entrada (usando getbuffer para eficiencia)
         with open(input_path, "wb") as f:
             f.write(uploaded_file.getbuffer())
 
-        # 3. Verificar tamaño y tipo
         file_size_mb = os.path.getsize(input_path) / (1024 * 1024)
         is_video = input_path.lower().endswith(('.mp4', '.m4v', '.mov', '.mkv'))
         
-        # GROQ tiene límite de 25MB.
         # Si es video O es un audio pesado (>24MB), convertimos.
         if is_video or file_size_mb > 24.0:
             status_text = f"Comprimiendo archivo de {file_size_mb:.1f} MB..."
             with st.spinner(status_text):
                 try:
-                    # Cargamos clip
                     clip = AudioFileClip(input_path)
-                    
-                    # Conversión forzada a MP3, Mono (1 canal), 32k bitrate
-                    # Esto asegura máxima compatibilidad y mínimo tamaño
                     clip.write_audiofile(
-                        output_path, 
-                        bitrate="32k", 
-                        nbytes=2, 
-                        codec='libmp3lame', 
-                        ffmpeg_params=["-ac", "1"], # Forzar mono
-                        logger=None
+                        output_path, bitrate="32k", nbytes=2, codec='libmp3lame', 
+                        ffmpeg_params=["-ac", "1"], logger=None
                     )
                     clip.close()
-                    
-                    # Limpiamos entrada para ahorrar espacio
-                    if os.path.exists(input_path):
-                        os.remove(input_path)
-                    
-                    # Verificación final
-                    new_size = os.path.getsize(output_path) / (1024 * 1024)
-                    if new_size > 25.0:
-                        st.warning(f"⚠️ El archivo comprimido pesa {new_size:.1f}MB. Puede que Groq lo rechace (Límite 25MB).")
-                    
+                    if os.path.exists(input_path): os.remove(input_path)
                     return output_path
-                    
                 except Exception as e:
                     st.error(f"Error interno en conversión (MoviePy): {e}")
                     return None
         
-        # Si es audio pequeño, usamos el original
-        # Renombramos el input al output deseado para mantener consistencia
         if input_path != output_path:
-             # Si ya existe un output viejo, lo borramos
-            if os.path.exists(output_path):
-                os.remove(output_path)
+            if os.path.exists(output_path): os.remove(output_path)
             os.rename(input_path, output_path)
-            
         return output_path
-
     except Exception as e:
         st.error(f"Error gestionando archivo: {e}")
         return None
@@ -133,7 +99,7 @@ def transcribe_audio_verbose(client, file_path, model_name):
     try:
         size_mb = os.path.getsize(file_path) / (1024 * 1024)
         if size_mb > 25:
-            st.error(f"❌ Archivo demasiado grande ({size_mb:.1f}MB) para la API. Intente recortarlo.")
+            st.error(f"❌ Archivo demasiado grande ({size_mb:.1f}MB).")
             return None, None
 
         with open(file_path, "rb") as file:
@@ -151,10 +117,7 @@ def transcribe_audio_verbose(client, file_path, model_name):
 
 # --- CORRECCIÓN ---
 def correct_text_with_llama(client, raw_text):
-    system_prompt = (
-        "Corrige ortografía y tildes. NO saludos. NO intros. NO resúmenes. "
-        "Devuelve SOLO el texto corregido idéntico en contenido."
-    )
+    system_prompt = "Corrige ortografía y tildes. NO saludos. NO intros. Devuelve SOLO texto corregido."
     try:
         completion = client.chat.completions.create(
             model="llama-3.1-8b-instant",
@@ -178,11 +141,8 @@ def search_in_segments(query, segments):
             prev = " ".join([s['text'] for s in segments[s_idx:i]])
             nxt = " ".join([s['text'] for s in segments[i+1:e_idx]])
             results.append({
-                "start": seg['start'],
-                "formatted": format_timestamp(seg['start']),
-                "match": seg['text'],
-                "prev": prev,
-                "next": nxt
+                "start": seg['start'], "formatted": format_timestamp(seg['start']),
+                "match": seg['text'], "prev": prev, "next": nxt
             })
     return results
 
@@ -198,6 +158,14 @@ def main_app():
             options=["whisper-large-v3-turbo", "whisper-large-v3"],
             help="Turbo es más rápido. V3 es más preciso."
         )
+        
+        st.divider()
+        # --- NUEVA OPCIÓN PARA CASOS ESPECIALES ---
+        large_mode = st.checkbox(
+            "📂 Modo Archivo Grande / Largo", 
+            help="Activa esto si el audio dura más de 40 min o pesa más de 25MB. Evita errores de límites en la API."
+        )
+        
         st.divider()
         if st.button("Salir"):
             st.session_state.clear()
@@ -210,7 +178,7 @@ def main_app():
     if uploaded_file:
         if st.button("🚀 Procesar", type="primary"):
             with st.status("Procesando...", expanded=True) as status:
-                st.write("🔍 Optimizando archivo (puede tardar si es grande)...")
+                st.write("🔍 Optimizando archivo (esto puede tardar si es muy grande)...")
                 
                 final_path = process_audio_file(uploaded_file)
                 st.session_state.audio_path = final_path
@@ -220,18 +188,21 @@ def main_app():
                     raw, segs = transcribe_audio_verbose(client, final_path, model_choice)
                     
                     if raw and segs:
-                        st.write("✨ Corrección final...")
-                        fixed = correct_text_with_llama(client, raw)
-                        st.session_state.transcript_text = fixed
+                        # --- LÓGICA CONDICIONAL SEGÚN EL CHECKBOX ---
+                        if large_mode:
+                            st.info("ℹ️ Modo Archivo Grande: Se omite corrección ortográfica para evitar errores.")
+                            st.session_state.transcript_text = raw # Texto directo, sin Llama
+                        else:
+                            st.write("✨ Corrección ortográfica (Llama)...")
+                            st.session_state.transcript_text = correct_text_with_llama(client, raw)
+                        
                         st.session_state.transcript_segments = segs
                         st.session_state.audio_start_time = 0
-                        st.session_state.search_results = None # Limpiar búsquedas previas
+                        st.session_state.search_results = None
                         status.update(label="¡Listo!", state="complete", expanded=False)
                     else: status.update(label="Error Transcripción", state="error")
                 else: status.update(label="Error Archivo", state="error")
 
-    # --- REPRODUCTOR DE AUDIO ---
-    # Se coloca fuera de pestañas para que esté siempre visible
     if st.session_state.audio_path and os.path.exists(st.session_state.audio_path):
         st.audio(st.session_state.audio_path, start_time=st.session_state.audio_start_time)
 
@@ -240,59 +211,52 @@ def main_app():
 
         with tab_txt:
             st.markdown("### 🔍 Búsqueda")
-            
-            # --- FORMULARIO DE BÚSQUEDA (SOLUCIÓN AL STOPPING) ---
-            # Al usar st.form, la página NO se recarga mientras escribes, 
-            # por lo que el audio NO se detiene hasta que das Enter o click en Buscar.
             with st.form(key="search_form"):
-                col_input, col_btn = st.columns([5, 1])
-                with col_input:
-                    search_query = st.text_input("Palabra clave", placeholder="Escribe y presiona Enter...")
-                with col_btn:
+                c1, c2 = st.columns([5, 1])
+                with c1: search_query = st.text_input("Palabra clave", placeholder="Escribe y presiona Enter...")
+                with c2: 
                     st.markdown("<div style='margin-top: 15px;'></div>", unsafe_allow_html=True)
                     submit_search = st.form_submit_button("Buscar")
             
-            # Lógica de búsqueda
             if submit_search:
-                if search_query:
-                    st.session_state.search_results = search_in_segments(search_query, st.session_state.transcript_segments)
-                else:
-                    st.session_state.search_results = None
+                st.session_state.search_results = search_in_segments(search_query, st.session_state.transcript_segments) if search_query else None
 
-            # Mostrar resultados (Persistentes)
             if st.session_state.search_results:
                 st.success(f"{len(st.session_state.search_results)} coincidencias")
                 for i, r in enumerate(st.session_state.search_results):
                     with st.container():
                         b_col, t_col = st.columns([1, 8])
                         with b_col:
-                            # Este botón SI recargará la página para mover el audio
                             if st.button(f"▶ {r['formatted']}", key=f"j_{i}"):
                                 st.session_state.audio_start_time = int(r['start'])
                                 st.rerun()
                         with t_col:
-                            st.markdown(
-                                f"<div class='search-result'><span style='color:#888'>...{r['prev']}</span> "
-                                f"<span class='highlight'>{r['match']}</span> "
-                                f"<span style='color:#888'>{r['next']}...</span></div>", 
-                                unsafe_allow_html=True
-                            )
-                if st.button("Limpiar Búsqueda"):
-                    st.session_state.search_results = None
-                    st.rerun()
+                            st.markdown(f"<div class='search-result'><span style='color:#888'>...{r['prev']}</span> <span class='highlight'>{r['match']}</span> <span style='color:#888'>{r['next']}...</span></div>", unsafe_allow_html=True)
+                if st.button("Limpiar Búsqueda"): st.session_state.search_results = None; st.rerun()
                 st.divider()
 
             st.text_area("Texto Completo", value=st.session_state.transcript_text, height=500)
             st.download_button("Descargar", st.session_state.transcript_text, "transcripcion.txt")
 
         with tab_chat:
-            # Chat igual que antes...
             for m in st.session_state.chat_history:
                 with st.chat_message(m["role"]): st.markdown(m["content"])
             
             if p := st.chat_input("Pregunta..."):
                 st.session_state.chat_history.append({"role": "user", "content": p})
                 with st.chat_message("user"): st.markdown(p)
+                
+                # --- LÓGICA CONDICIONAL PARA CHAT ---
+                # Si está activado el modo archivo grande, recortamos el contexto
+                full_text = st.session_state.transcript_text
+                
+                if large_mode:
+                    # Límite seguro: ~15,000 caracteres (aprox 4000 tokens)
+                    # Esto evita el Error 413 garantizado
+                    chat_context = full_text[:15000] + "\n...(texto truncado por seguridad)..."
+                else:
+                    chat_context = full_text
+
                 with st.chat_message("assistant"):
                     holder = st.empty()
                     full = ""
@@ -300,7 +264,7 @@ def main_app():
                         stream = client.chat.completions.create(
                             model="llama-3.1-8b-instant",
                             messages=[
-                                {"role": "system", "content": f"Contexto:\n{st.session_state.transcript_text}"},
+                                {"role": "system", "content": f"Contexto:\n{chat_context}"},
                                 {"role": "user", "content": p}
                             ], stream=True
                         )
@@ -310,7 +274,7 @@ def main_app():
                                 holder.markdown(full + "▌")
                         holder.markdown(full)
                         st.session_state.chat_history.append({"role": "assistant", "content": full})
-                    except Exception as e: st.error(str(e))
+                    except Exception as e: st.error(f"Error: {e}")
 
 if __name__ == "__main__":
     if check_password(): main_app()
