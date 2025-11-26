@@ -365,7 +365,7 @@ def main_app():
             st.markdown("### 🔍 Búsqueda Avanzada en Transcripción")
             
             # Búsqueda SIN formulario para evitar rerun
-            col_search, col_btn = st.columns([5, 1])
+            col_search, col_btn, col_clear = st.columns([4, 1, 1])
             with col_search: 
                 search_query = st.text_input(
                     "Palabra o frase clave", 
@@ -378,10 +378,16 @@ def main_app():
                 st.markdown("<div style='margin-top: 0px;'></div>", unsafe_allow_html=True)
                 if st.button("🔎 Buscar", use_container_width=True, key="search_btn"):
                     st.session_state.search_trigger += 1
+            with col_clear:
+                st.markdown("<div style='margin-top: 0px;'></div>", unsafe_allow_html=True)
+                if st.button("🗑️ Limpiar", use_container_width=True, key="clear_search_btn"):
+                    st.session_state.last_search_query = ""
+                    st.session_state.search_results = None
+                    st.rerun()
             
             # Ejecutar búsqueda cuando cambia el query o se presiona el botón
             if search_query != st.session_state.last_search_query or st.session_state.search_trigger > 0:
-                if search_query:
+                if search_query.strip():  # ← Solo buscar si hay contenido real
                     st.session_state.last_search_query = search_query
                     st.session_state.search_results = search_in_segments(
                         search_query, 
@@ -389,6 +395,7 @@ def main_app():
                         st.session_state.context_sentences
                     )
                 else:
+                    # Limpiar búsqueda si el campo está vacío
                     st.session_state.last_search_query = ""
                     st.session_state.search_results = None
                 
