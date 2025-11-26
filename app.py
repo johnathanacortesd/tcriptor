@@ -3,6 +3,7 @@ import os
 import tempfile
 from groq import Groq
 from moviepy.editor import AudioFileClip
+import html  # ← IMPORTANTE: Para escapar caracteres especiales en HTML
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(
@@ -408,11 +409,16 @@ def main_app():
                                     st.rerun()
                             
                             with t_col:
+                                # ← AQUÍ ESTÁ LA CORRECCIÓN CLAVE: usar html.escape()
+                                prev_escaped = html.escape(r['prev'])
+                                match_escaped = html.escape(r['match'])
+                                next_escaped = html.escape(r['next'])
+                                
                                 st.markdown(
                                     f"""<div class='search-result'>
-                                        <span class='context-text'>...{r['prev']}</span> 
-                                        <span class='highlight'>{r['match']}</span> 
-                                        <span class='context-text'>{r['next']}...</span>
+                                        <span class='context-text'>...{prev_escaped}</span> 
+                                        <span class='highlight'>{match_escaped}</span> 
+                                        <span class='context-text'>{next_escaped}...</span>
                                     </div>""", 
                                     unsafe_allow_html=True
                                 )
@@ -423,11 +429,12 @@ def main_app():
                         st.rerun()
                 
                 else:
-                    # Mensaje cuando no hay resultados
+                    # ← CORRECCIÓN: escapar el query en el mensaje de "sin resultados"
+                    query_escaped = html.escape(st.session_state.last_search_query)
                     st.markdown(f"""
                     <div class='no-results'>
                         <strong>⚠️ Sin resultados</strong><br>
-                        No se encontraron coincidencias para "<em>{st.session_state.last_search_query}</em>".<br>
+                        No se encontraron coincidencias para "<em>{query_escaped}</em>".<br>
                         <small>💡 Intenta con términos diferentes o verifica la ortografía.</small>
                     </div>
                     """, unsafe_allow_html=True)
@@ -439,7 +446,7 @@ def main_app():
             
             st.divider()
             
-            # Texto completo
+            # Texto completo - ← st.text_area maneja UTF-8 correctamente
             st.markdown("### 📄 Texto Completo de la Transcripción")
             st.text_area(
                 "Transcripción", 
@@ -452,14 +459,14 @@ def main_app():
             with col_d1:
                 st.download_button(
                     "📥 Descargar como TXT", 
-                    st.session_state.transcript_text, 
+                    st.session_state.transcript_text.encode('utf-8'),  # ← Asegurar UTF-8 en descarga
                     "transcripcion.txt",
                     use_container_width=True
                 )
             with col_d2:
                 st.download_button(
                     "📥 Descargar como MD", 
-                    st.session_state.transcript_text, 
+                    st.session_state.transcript_text.encode('utf-8'),  # ← Asegurar UTF-8 en descarga
                     "transcripcion.md",
                     mime="text/markdown",
                     use_container_width=True
