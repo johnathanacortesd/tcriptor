@@ -92,6 +92,7 @@ if "chat_history" not in st.session_state: st.session_state.chat_history = []
 if "search_results" not in st.session_state: st.session_state.search_results = None
 if "last_search_query" not in st.session_state: st.session_state.last_search_query = ""
 if "context_sentences" not in st.session_state: st.session_state.context_sentences = 3
+if "search_trigger" not in st.session_state: st.session_state.search_trigger = 0
 
 # --- UTILIDADES ---
 def format_timestamp(seconds):
@@ -253,13 +254,22 @@ def main_app():
         
         # Control de contexto en búsqueda
         st.markdown("#### 🔍 Configuración de Búsqueda")
-        st.session_state.context_sentences = st.slider(
+        context_size = st.slider(
             "Oraciones de contexto",
             min_value=1,
             max_value=8,
-            value=3,
+            value=st.session_state.context_sentences,
             help="Cantidad de oraciones antes y después de la coincidencia"
         )
+        if context_size != st.session_state.context_sentences:
+            st.session_state.context_sentences = context_size
+            # Si hay búsqueda activa, recalcular resultados
+            if st.session_state.last_search_query:
+                st.session_state.search_results = search_in_segments(
+                    st.session_state.last_search_query,
+                    st.session_state.transcript_segments,
+                    context_size
+                )
         
         st.divider()
         
@@ -339,11 +349,11 @@ def main_app():
                 else: 
                     status.update(label="❌ Error procesando archivo", state="error")
 
-    # --- REPRODUCTOR PERSISTENTE (sin rerun al buscar) ---
+    # --- REPRODUCTOR PERSISTENTE ---
     if st.session_state.audio_path and os.path.exists(st.session_state.audio_path):
         st.markdown("### 🎵 Reproductor de Audio")
         st.audio(st.session_state.audio_path, start_time=st.session_state.audio_start_time)
-        st.caption("💡 Tip: El audio se mantiene en reproducción mientras buscas o navegas")
+        st.caption("💡 Tip: Usa el buscador sin detener la reproducción. Los timestamps sí saltan al momento exacto.")
 
     # --- CONTENIDO PRINCIPAL ---
     if st.session_state.transcript_text:
@@ -353,28 +363,35 @@ def main_app():
         with tab_txt:
             st.markdown("### 🔍 Búsqueda Avanzada en Transcripción")
             
-            # Formulario para evitar rerun del audio
-            with st.form(key="search_form", clear_on_submit=False):
-                col_search, col_btn = st.columns([5, 1])
-                with col_search: 
-                    search_query = st.text_input(
-                        "Palabra o frase clave", 
-                        value=st.session_state.last_search_query,
-                        placeholder="Ejemplo: 'innovación', 'proyecto importante'...",
-                        label_visibility="collapsed"
-                    )
-                with col_btn: 
-                    st.markdown("<div style='margin-top: 0px;'></div>", unsafe_allow_html=True)
-                    submit_search = st.form_submit_button("🔎 Buscar", use_container_width=True)
-            
-            # Ejecutar búsqueda
-            if submit_search and search_query:
-                st.session_state.last_search_query = search_query
-                st.session_state.search_results = search_in_segments(
-                    search_query, 
-                    st.session_state.transcript_segments,
-                    st.session_state.context_sentences
+            # Búsqueda SIN formulario para evitar rerun
+            col_search, col_btn = st.columns([5, 1])
+            with col_search: 
+                search_query = st.text_input(
+                    "Palabra o frase clave", 
+                    value=st.session_state.last_search_query,
+                    placeholder="Ejemplo: 'innovación', 'proyecto importante'...",
+                    label_visibility="collapsed",
+                    key="search_input"
                 )
+            with col_btn:
+                st.markdown("<div style='margin-top: 0px;'></div>", unsafe_allow_html=True)
+                if st.button("🔎 Buscar", use_container_width=True, key="search_btn"):
+                    st.session_state.search_trigger += 1
+            
+            # Ejecutar búsqueda cuando cambia el query o se presiona el botón
+            if search_query != st.session_state.last_search_query or st.session_state.search_trigger > 0:
+                if search_query:
+                    st.session_state.last_search_query = search_query
+                    st.session_state.search_results = search_in_segments(
+                        search_query, 
+                        st.session_state.transcript_segments,
+                        st.session_state.context_sentences
+                    )
+                else:
+                    st.session_state.last_search_query = ""
+                    st.session_state.search_results = None
+                
+                st.session_state.search_trigger = 0
 
             # Mostrar resultados o mensaje de "sin resultados"
             if st.session_state.last_search_query:
