@@ -385,11 +385,10 @@ def main_app():
                         with st.container():
                             b_col, t_col = st.columns([1, 8])
                             with b_col:
-                                # Botón que actualiza el timestamp sin rerun completo
+                                # Botón que actualiza el timestamp y recarga solo el reproductor
                                 if st.button(f"▶️ {r['formatted']}", key=f"jump_{i}", use_container_width=True):
                                     st.session_state.audio_start_time = int(r['start'])
-                                    # No hacemos rerun, dejamos que el usuario reinicie el audio manualmente
-                                    st.info(f"⏩ Audio configurado para iniciar en {r['formatted']}. Recarga el reproductor si es necesario.")
+                                    st.rerun()
                             
                             with t_col:
                                 st.markdown(
