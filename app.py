@@ -1,6 +1,7 @@
 import streamlit as st
 import os
 import tempfile
+import unicodedata
 from groq import Groq
 from moviepy.editor import AudioFileClip
 import re
@@ -96,7 +97,6 @@ def format_timestamp(seconds):
 
 def normalize_text(text):
     """Normaliza texto para búsqueda más flexible"""
-    import unicodedata
     text = ''.join(c for c in unicodedata.normalize('NFD', text) if unicodedata.category(c) != 'Mn')
     return text.lower().strip()
 
@@ -104,7 +104,7 @@ def fuzzy_search_score(query, text):
     """Calcula similitud para búsqueda difusa"""
     return SequenceMatcher(None, normalize_text(query), normalize_text(text)).ratio()
 
-# --- SEGURIDAD (MODIFICADO PARA ENTER) ---
+# --- SEGURIDAD ---
 def check_password():
     """Sistema de autenticación con soporte para tecla Enter"""
     if st.session_state.authenticated: 
@@ -114,14 +114,12 @@ def check_password():
     col1, col2, col3 = st.columns([1, 2, 1])
     
     with col2:
-        # Usamos un st.form para permitir el envío con Enter
         with st.form("login_form"):
             password_input = st.text_input(
                 "Contraseña", 
                 type="password", 
                 key=f"pwd_{st.session_state.password_attempts}"
             )
-            # st.form_submit_button habilita el Enter dentro del form
             submit_button = st.form_submit_button("Ingresar", use_container_width=True)
             
         if submit_button:
@@ -151,12 +149,20 @@ def get_groq_client():
         st.error("❌ Error: No se encontró 'groq_api_key' en secrets.toml")
         return None
 
-# --- PROCESAMIENTO DE ARCHIVOS ---
+# --- PROCESAMIENTO DE ARCHIVOS (CORREGIDO) ---
 def process_audio_file(uploaded_file):
-    """Procesamiento optimizado con mejor manejo de errores"""
+    """Procesamiento optimizado con limpieza estricta de nombres para evitar errores UTF-8"""
     try:
         temp_dir = tempfile.gettempdir()
-        safe_name = "".join([c for c in uploaded_file.name if c.isalnum() or c in ('.','_')]).strip()
+        
+        # 1. Normalizar nombre para quitar tildes (ej: canción.mp3 -> cancion.mp3)
+        # Esto soluciona el error 'utf-8 codec can't decode' en Windows/MoviePy
+        filename_normalized = unicodedata.normalize('NFKD', uploaded_file.name).encode('ascii', 'ignore').decode('ascii')
+        
+        # 2. Filtrar solo caracteres seguros
+        safe_name = "".join([c for c in filename_normalized if c.isalnum() or c in ('.', '_')]).strip()
+        if not safe_name: safe_name = "audio_temp.mp3"
+
         input_path = os.path.join(temp_dir, f"input_{safe_name}")
         output_path = os.path.join(temp_dir, f"processed_{os.path.splitext(safe_name)[0]}.mp3")
 
@@ -179,7 +185,8 @@ def process_audio_file(uploaded_file):
                         nbytes=2, 
                         codec='libmp3lame', 
                         ffmpeg_params=["-ac", "1", "-ar", "16000"],
-                        logger=None
+                        verbose=False,  # Desactivar logs ruidosos
+                        logger=None     # Evitar errores de codificación en consola
                     )
                     clip.close()
                     if os.path.exists(input_path): 
@@ -483,11 +490,10 @@ def main_app():
             "📥 Exportar"
         ])
 
-        # TAB 1: BÚSQUEDA MEJORADA (MODIFICADO PARA ENTER)
+        # TAB 1: BÚSQUEDA MEJORADA
         with tab_txt:
             st.markdown("### 🔍 Búsqueda Inteligente")
             
-            # Usamos st.form para habilitar la tecla ENTER al buscar
             with st.form(key="search_form", clear_on_submit=False):
                 col_s, col_b = st.columns([5, 1])
                 with col_s: 
@@ -499,7 +505,6 @@ def main_app():
                         key="search_input_widget"
                     )
                 with col_b:
-                    # Este botón se activa al presionar Enter en el campo de texto
                     submit_search = st.form_submit_button("🔎", use_container_width=True)
 
             if submit_search:
@@ -512,7 +517,6 @@ def main_app():
                         fuzzy_threshold if enable_fuzzy else 1.0
                     )
                 else:
-                    # Si se envía vacío, limpiar
                     st.session_state.search_results = None
                     st.session_state.last_search_query = ""
                     st.rerun()
