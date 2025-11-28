@@ -82,6 +82,7 @@ if "last_search_query" not in st.session_state: st.session_state.last_search_que
 if "context_sentences" not in st.session_state: st.session_state.context_sentences = 3
 if "enable_punctuation" not in st.session_state: st.session_state.enable_punctuation = True
 if "enable_diarization" not in st.session_state: st.session_state.enable_diarization = False
+if "password_attempts" not in st.session_state: st.session_state.password_attempts = 0
 
 # --- UTILIDADES MEJORADAS ---
 def format_timestamp(seconds):
@@ -95,7 +96,6 @@ def format_timestamp(seconds):
 
 def normalize_text(text):
     """Normaliza texto para búsqueda más flexible"""
-    # Elimina acentos, convierte a minúsculas
     import unicodedata
     text = ''.join(c for c in unicodedata.normalize('NFD', text) if unicodedata.category(c) != 'Mn')
     return text.lower().strip()
@@ -104,35 +104,49 @@ def fuzzy_search_score(query, text):
     """Calcula similitud para búsqueda difusa"""
     return SequenceMatcher(None, normalize_text(query), normalize_text(text)).ratio()
 
-# --- SEGURIDAD (CORREGIDA) ---
+# --- SEGURIDAD (CORREGIDA DEFINITIVAMENTE) ---
 def check_password():
+    """Sistema de autenticación sin doble clic"""
     if st.session_state.authenticated: 
         return True
     
     st.title("🔒 Acceso Restringido")
     col1, col2, col3 = st.columns([1, 2, 1])
+    
     with col2:
-        with st.form("login_form"):
-            pwd = st.text_input("Contraseña", type="password")
-            submit = st.form_submit_button("Ingresar", use_container_width=True)
-            
-            if submit:
-                try:
-                    if pwd == st.secrets["general"]["app_password"]:
-                        st.session_state.authenticated = True
-                        st.success("✅ Acceso concedido")
-                        st.balloons()
-                        st.rerun()
-                    else: 
-                        st.error("⛔ Contraseña incorrecta")
-                except: 
-                    st.error("❌ Error en configuración secrets.toml")
+        # Usar key único para evitar conflictos
+        password_input = st.text_input(
+            "Contraseña", 
+            type="password", 
+            key=f"pwd_{st.session_state.password_attempts}"
+        )
+        
+        if st.button("Ingresar", use_container_width=True, key="login_btn"):
+            try:
+                correct_password = st.secrets["general"]["app_password"]
+                if password_input == correct_password:
+                    st.session_state.authenticated = True
+                    st.success("✅ Acceso concedido")
+                    st.balloons()
+                    # Incrementar contador para forzar nuevo key en próximo intento si falla
+                    st.session_state.password_attempts += 1
+                    st.rerun()
+                else: 
+                    st.error("⛔ Contraseña incorrecta")
+                    st.session_state.password_attempts += 1
+            except KeyError:
+                st.error("❌ Error: No se encontró 'app_password' en secrets.toml")
+                st.info("💡 Verifica que tu archivo secrets.toml contenga:\n```\n[general]\napp_password = \"tu_contraseña\"\ngroq_api_key = \"tu_api_key\"\n```")
+            except Exception as e:
+                st.error(f"❌ Error inesperado: {str(e)}")
+    
     return False
 
 def get_groq_client():
     try: 
         return Groq(api_key=st.secrets["general"]["groq_api_key"])
     except: 
+        st.error("❌ Error: No se encontró 'groq_api_key' en secrets.toml")
         return None
 
 # --- PROCESAMIENTO DE ARCHIVOS (MEJORADO) ---
@@ -144,14 +158,12 @@ def process_audio_file(uploaded_file):
         input_path = os.path.join(temp_dir, f"input_{safe_name}")
         output_path = os.path.join(temp_dir, f"processed_{os.path.splitext(safe_name)[0]}.mp3")
 
-        # Guardar archivo temporal
         with open(input_path, "wb") as f:
             f.write(uploaded_file.getbuffer())
 
         file_size_mb = os.path.getsize(input_path) / (1024 * 1024)
         is_video = input_path.lower().endswith(('.mp4', '.m4v', '.mov', '.mkv', '.avi', '.flv'))
         
-        # Mostrar información del archivo
         st.info(f"📊 Archivo: {file_size_mb:.1f} MB | Tipo: {'Video' if is_video else 'Audio'}")
         
         if is_video or file_size_mb > 24.0:
@@ -159,13 +171,12 @@ def process_audio_file(uploaded_file):
             with st.spinner(status_text):
                 try:
                     clip = AudioFileClip(input_path)
-                    # Configuración optimizada para mejor calidad/tamaño
                     clip.write_audiofile(
                         output_path, 
-                        bitrate="48k",  # Aumentado para mejor calidad
+                        bitrate="48k",
                         nbytes=2, 
                         codec='libmp3lame', 
-                        ffmpeg_params=["-ac", "1", "-ar", "16000"],  # Sample rate óptimo para Whisper
+                        ffmpeg_params=["-ac", "1", "-ar", "16000"],
                         logger=None
                     )
                     clip.close()
@@ -204,10 +215,9 @@ def transcribe_audio_verbose(client, file_path, model_name, enable_punctuation=T
                 "model": model_name,
                 "response_format": "verbose_json",
                 "language": "es",
-                "temperature": 0.0  # Máxima precisión
+                "temperature": 0.0
             }
             
-            # Prompt para mejorar precisión
             if enable_punctuation:
                 params["prompt"] = "Transcripción en español con puntuación correcta, tildes y mayúsculas apropiadas."
             
@@ -239,7 +249,7 @@ REGLAS:
 
     try:
         completion = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",  # Modelo más potente para mejor corrección
+            model="llama-3.3-70b-versatile",
             messages=[
                 {"role": "system", "content": system_prompt}, 
                 {"role": "user", "content": raw_text}
@@ -249,7 +259,6 @@ REGLAS:
         )
         result = completion.choices[0].message.content
         
-        # Limpieza de posibles prefijos
         for prefix in ["Aquí está el texto corregido:", "Texto corregido:", "Corrección:"]:
             result = result.replace(prefix, "")
         
@@ -270,22 +279,17 @@ def search_in_segments(query, segments, context_size=3, fuzzy_threshold=0.7):
     for i, seg in enumerate(segments):
         text_normalized = normalize_text(seg['text'])
         
-        # Búsqueda exacta
         is_exact_match = query_normalized in text_normalized
-        
-        # Búsqueda difusa (para errores de transcripción)
         fuzzy_score = fuzzy_search_score(query_normalized, text_normalized)
         is_fuzzy_match = fuzzy_score >= fuzzy_threshold
         
         if is_exact_match or is_fuzzy_match:
-            # Contexto previo y posterior
             s_idx = max(0, i - context_size)
             prev = " ".join([s['text'] for s in segments[s_idx:i]])
             
             e_idx = min(len(segments), i + context_size + 1)
             nxt = " ".join([s['text'] for s in segments[i+1:e_idx]])
             
-            # Determinar tipo de coincidencia
             match_type = "exact" if is_exact_match else "fuzzy"
             confidence = "high" if is_exact_match else ("medium" if fuzzy_score >= 0.85 else "low")
             
@@ -301,7 +305,6 @@ def search_in_segments(query, segments, context_size=3, fuzzy_threshold=0.7):
                 "score": fuzzy_score if is_fuzzy_match else 1.0
             })
     
-    # Ordenar por puntuación (mejores coincidencias primero)
     results.sort(key=lambda x: x['score'], reverse=True)
     return results
 
@@ -318,7 +321,6 @@ def export_with_timestamps(segments):
 def main_app():
     client = get_groq_client()
     if not client: 
-        st.error("❌ No se pudo conectar con Groq API")
         st.stop()
 
     # --- BARRA LATERAL MEJORADA ---
@@ -356,7 +358,7 @@ def main_app():
         enable_fuzzy = st.checkbox(
             "🎯 Búsqueda inteligente (fuzzy)",
             value=True,
-            help="Encuentra coincidencias aproximadas (útil para errores de transcripción)"
+            help="Encuentra coincidencias aproximadas"
         )
         
         if enable_fuzzy:
@@ -380,7 +382,6 @@ def main_app():
         
         st.divider()
         
-        # Estadísticas mejoradas
         if st.session_state.transcript_text:
             st.markdown("#### 📊 Estadísticas")
             words = st.session_state.transcript_text.split()
@@ -388,7 +389,6 @@ def main_app():
             char_count = len(st.session_state.transcript_text)
             segment_count = len(st.session_state.transcript_segments) if st.session_state.transcript_segments else 0
             
-            # Calcular duración total
             if st.session_state.transcript_segments:
                 duration_secs = st.session_state.transcript_segments[-1]['end']
                 duration_formatted = format_timestamp(duration_secs)
@@ -430,7 +430,7 @@ def main_app():
 
     if uploaded_file:
         if st.button("🚀 Iniciar Transcripción", type="primary", use_container_width=True):
-            # Limpiar búsqueda anterior al subir nuevo audio
+            # LIMPIAR BÚSQUEDA AL SUBIR NUEVO AUDIO
             st.session_state.search_results = None
             st.session_state.last_search_query = ""
             
@@ -459,9 +459,7 @@ def main_app():
                         
                         st.session_state.transcript_segments = segs
                         st.session_state.audio_start_time = 0
-                        st.session_state.search_results = None
                         st.session_state.chat_history = []
-                        st.session_state.last_search_query = ""
                         
                         status.update(label="✅ ¡Completado!", state="complete", expanded=False)
                         st.balloons()
@@ -487,27 +485,27 @@ def main_app():
         with tab_txt:
             st.markdown("### 🔍 Búsqueda Inteligente")
             
-            with st.form(key="search_form", clear_on_submit=False):
-                col_s, col_b = st.columns([5, 1])
-                with col_s: 
-                    search_query = st.text_input(
-                        "Buscar en transcripción", 
-                        value=st.session_state.last_search_query,
-                        placeholder="Ej: 'innovación tecnológica', 'resultados financieros'...",
-                        label_visibility="collapsed"
-                    )
-                with col_b: 
-                    submit_search = st.form_submit_button("🔎", use_container_width=True)
-            
-            if submit_search and search_query:
-                st.session_state.last_search_query = search_query
-                with st.spinner("Buscando..."):
-                    st.session_state.search_results = search_in_segments(
-                        search_query, 
-                        st.session_state.transcript_segments,
-                        st.session_state.context_sentences,
-                        fuzzy_threshold if enable_fuzzy else 1.0
-                    )
+            # Búsqueda SIN FORMULARIO para evitar reload del audio
+            col_s, col_b = st.columns([5, 1])
+            with col_s: 
+                search_query = st.text_input(
+                    "Buscar en transcripción", 
+                    value=st.session_state.last_search_query,
+                    placeholder="Ej: 'innovación tecnológica', 'resultados financieros'...",
+                    label_visibility="collapsed",
+                    key="search_input"
+                )
+            with col_b:
+                # Botón simple sin formulario
+                if st.button("🔎", use_container_width=True, key="search_btn"):
+                    if search_query:
+                        st.session_state.last_search_query = search_query
+                        st.session_state.search_results = search_in_segments(
+                            search_query, 
+                            st.session_state.transcript_segments,
+                            st.session_state.context_sentences,
+                            fuzzy_threshold if enable_fuzzy else 1.0
+                        )
 
             # Mostrar resultados
             if st.session_state.last_search_query:
@@ -524,7 +522,6 @@ def main_app():
                                     st.rerun()
                             
                             with col_text:
-                                # Badge de confianza
                                 confidence_class = f"confidence-{r['confidence']}"
                                 confidence_text = {"high": "Exacto", "medium": "Probable", "low": "Similar"}[r['confidence']]
                                 
@@ -539,7 +536,7 @@ def main_app():
                                     unsafe_allow_html=True
                                 )
                     
-                    if st.button("🗑️ Limpiar búsqueda"):
+                    if st.button("🗑️ Limpiar búsqueda", key="clear_search"):
                         st.session_state.search_results = None
                         st.session_state.last_search_query = ""
                         st.rerun()
@@ -548,9 +545,14 @@ def main_app():
                     <div class='no-results'>
                         <strong>⚠️ Sin resultados</strong><br>
                         No se encontró "<em>{st.session_state.last_search_query}</em>"<br>
-                        <small>💡 Tip: {'La búsqueda inteligente está activa, pero no hay coincidencias cercanas' if enable_fuzzy else 'Activa búsqueda inteligente en el menú lateral'}</small>
+                        <small>💡 Tip: {'La búsqueda inteligente está activa' if enable_fuzzy else 'Activa búsqueda inteligente en el menú'}</small>
                     </div>
                     """, unsafe_allow_html=True)
+                    
+                    if st.button("🔄 Nueva búsqueda", key="new_search"):
+                        st.session_state.last_search_query = ""
+                        st.session_state.search_results = None
+                        st.rerun()
             
             st.divider()
             st.markdown("### 📄 Texto Completo")
