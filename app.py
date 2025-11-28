@@ -112,18 +112,21 @@ def check_password():
     st.title("🔒 Acceso Restringido")
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
-        pwd = st.text_input("Contraseña", type="password", key="pwd_input")
-        if st.button("Ingresar", use_container_width=True):
-            try:
-                if pwd == st.secrets["general"]["app_password"]:
-                    st.session_state.authenticated = True
-                    st.success("✅ Acceso concedido")
-                    st.balloons()
-                    st.rerun()
-                else: 
-                    st.error("⛔ Contraseña incorrecta")
-            except: 
-                st.error("❌ Error en configuración secrets.toml")
+        with st.form("login_form"):
+            pwd = st.text_input("Contraseña", type="password")
+            submit = st.form_submit_button("Ingresar", use_container_width=True)
+            
+            if submit:
+                try:
+                    if pwd == st.secrets["general"]["app_password"]:
+                        st.session_state.authenticated = True
+                        st.success("✅ Acceso concedido")
+                        st.balloons()
+                        st.rerun()
+                    else: 
+                        st.error("⛔ Contraseña incorrecta")
+                except: 
+                    st.error("❌ Error en configuración secrets.toml")
     return False
 
 def get_groq_client():
@@ -427,6 +430,10 @@ def main_app():
 
     if uploaded_file:
         if st.button("🚀 Iniciar Transcripción", type="primary", use_container_width=True):
+            # Limpiar búsqueda anterior al subir nuevo audio
+            st.session_state.search_results = None
+            st.session_state.last_search_query = ""
+            
             with st.status("⚙️ Procesando...", expanded=True) as status:
                 st.write("🔍 Analizando archivo...")
                 
