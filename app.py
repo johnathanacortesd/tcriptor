@@ -1,88 +1,36 @@
 import streamlit as st
 import os
 import tempfile
+import textwrap
 from groq import Groq
 from moviepy.editor import AudioFileClip
+import math
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(
-    page_title="Transcriptor Pro",
+    page_title="Transcriptor Pro V2",
     page_icon="🎙️",
     layout="wide"
 )
 
-# --- ESTILOS CSS MEJORADOS ---
+# --- ESTILOS CSS ---
 st.markdown("""
 <style>
     .search-result { 
-        background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+        background-color: #f0f2f6;
         padding: 15px; 
         border-radius: 8px; 
-        margin-bottom: 12px; 
+        margin-bottom: 10px; 
         border-left: 5px solid #ff4b4b;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        transition: all 0.3s ease;
     }
-    .search-result:hover {
-        transform: translateX(5px);
-        box-shadow: 0 4px 8px rgba(0,0,0,0.15);
-    }
-    .highlight { 
-        background-color: #ffeb3b; 
-        font-weight: bold; 
-        padding: 3px 6px; 
-        border-radius: 4px; 
-        color: #000;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.2);
-    }
-    .context-text {
-        color: #666;
-        font-style: italic;
-        line-height: 1.6;
-    }
-    .timestamp-button {
-        background-color: #ff4b4b;
-        color: white;
-        border: none;
-        padding: 8px 16px;
-        border-radius: 6px;
-        font-weight: bold;
-        cursor: pointer;
-        transition: all 0.3s ease;
-    }
-    .timestamp-button:hover {
-        background-color: #ff3333;
-        transform: scale(1.05);
-    }
-    .no-results {
-        background-color: #fff3cd;
-        border-left: 5px solid #ffc107;
-        padding: 15px;
-        border-radius: 8px;
-        margin: 15px 0;
-    }
-    .stats-card {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        padding: 15px;
-        border-radius: 10px;
-        text-align: center;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-    }
-    .stForm { border: none; padding: 0; }
-    
-    /* Mejoras visuales generales */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 8px;
-    }
-    .stTabs [data-baseweb="tab"] {
-        border-radius: 8px 8px 0 0;
-        padding: 10px 20px;
-    }
+    .highlight { background-color: #ffeb3b; font-weight: bold; padding: 2px 5px; border-radius: 4px; }
+    .timestamp-btn { text-align: left; margin: 0; }
+    /* Ajuste para formularios */
+    [data-testid="stForm"] { border: 1px solid #ddd; padding: 20px; border-radius: 10px; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- ESTADO (SESSION STATE) ---
+# --- ESTADO ---
 if "authenticated" not in st.session_state: st.session_state.authenticated = False
 if "transcript_text" not in st.session_state: st.session_state.transcript_text = None
 if "transcript_segments" not in st.session_state: st.session_state.transcript_segments = None
@@ -90,8 +38,6 @@ if "audio_path" not in st.session_state: st.session_state.audio_path = None
 if "audio_start_time" not in st.session_state: st.session_state.audio_start_time = 0
 if "chat_history" not in st.session_state: st.session_state.chat_history = []
 if "search_results" not in st.session_state: st.session_state.search_results = None
-if "last_search_query" not in st.session_state: st.session_state.last_search_query = ""
-if "context_sentences" not in st.session_state: st.session_state.context_sentences = 3
 
 # --- UTILIDADES ---
 def format_timestamp(seconds):
@@ -99,37 +45,59 @@ def format_timestamp(seconds):
     secs = int(seconds % 60)
     return f"{minutes:02d}:{secs:02d}"
 
-# --- SEGURIDAD ---
+def generate_srt(segments):
+    """Genera contenido en formato SRT para subtítulos"""
+    srt_content = ""
+    for i, seg in enumerate(segments):
+        start = seg['start']
+        end = seg['end']
+        
+        # Formato SRT: 00:00:00,000
+        def to_srt_time(sec):
+            hrs = int(sec // 3600)
+            mins = int((sec % 3600) // 60)
+            secs = int(sec % 60)
+            millis = int((sec - int(sec)) * 1000)
+            return f"{hrs:02d}:{mins:02d}:{secs:02d},{millis:03d}"
+            
+        srt_content += f"{i+1}\n"
+        srt_content += f"{to_srt_time(start)} --> {to_srt_time(end)}\n"
+        srt_content += f"{seg['text'].strip()}\n\n"
+    return srt_content
+
+# --- SEGURIDAD MEJORADA ---
 def check_password():
     if st.session_state.authenticated: return True
-    st.title("🔒 Acceso Restringido")
+    
+    st.markdown("<br><br>", unsafe_allow_html=True)
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
-        pwd = st.text_input("Contraseña", type="password")
-        if st.button("Ingresar", use_container_width=True):
-            try:
-                if pwd == st.secrets["general"]["app_password"]:
+        st.info("🔒 Por favor, inicia sesión para continuar.")
+        with st.form("login_form"):
+            pwd = st.text_input("Contraseña", type="password")
+            if st.form_submit_button("Ingresar", use_container_width=True):
+                # Manejo seguro si no existe secrets
+                correct_pwd = st.secrets.get("general", {}).get("app_password", "admin")
+                if pwd == correct_pwd:
                     st.session_state.authenticated = True
                     st.rerun()
-                else: st.error("⛔ Contraseña incorrecta")
-            except: st.error("❌ Error en configuración secrets.toml")
+                else:
+                    st.error("⛔ Contraseña incorrecta")
     return False
 
 def get_groq_client():
     try: return Groq(api_key=st.secrets["general"]["groq_api_key"])
-    except: return None
+    except: 
+        st.error("❌ Falta la API Key de Groq en secrets.toml")
+        return None
 
-# --- PROCESAMIENTO DE ARCHIVOS (ROBUSTO) ---
+# --- PROCESAMIENTO ---
 def process_audio_file(uploaded_file):
-    """
-    Maneja la conversión y compresión. Usa rutas temporales manuales
-    para evitar errores con archivos grandes (>100MB).
-    """
     try:
         temp_dir = tempfile.gettempdir()
         safe_name = "".join([c for c in uploaded_file.name if c.isalnum() or c in ('.','_')]).strip()
-        input_path = os.path.join(temp_dir, f"input_{safe_name}")
-        output_path = os.path.join(temp_dir, f"processed_{os.path.splitext(safe_name)[0]}.mp3")
+        input_path = os.path.join(temp_dir, f"raw_{safe_name}")
+        output_path = os.path.join(temp_dir, f"ready_{os.path.splitext(safe_name)[0]}.mp3")
 
         with open(input_path, "wb") as f:
             f.write(uploaded_file.getbuffer())
@@ -137,368 +105,204 @@ def process_audio_file(uploaded_file):
         file_size_mb = os.path.getsize(input_path) / (1024 * 1024)
         is_video = input_path.lower().endswith(('.mp4', '.m4v', '.mov', '.mkv'))
         
+        # Comprimir si es video o si es audio > 24MB
         if is_video or file_size_mb > 24.0:
-            status_text = f"🔄 Comprimiendo archivo de {file_size_mb:.1f} MB (esto puede tardar)..."
-            with st.spinner(status_text):
-                try:
-                    clip = AudioFileClip(input_path)
-                    clip.write_audiofile(
-                        output_path, 
-                        bitrate="32k", 
-                        nbytes=2, 
-                        codec='libmp3lame', 
-                        ffmpeg_params=["-ac", "1"], 
-                        logger=None
-                    )
-                    clip.close()
-                    if os.path.exists(input_path): os.remove(input_path)
-                    return output_path
-                except Exception as e:
-                    st.error(f"❌ Error interno en conversión: {e}")
-                    return None
+            with st.spinner(f"🔄 Optimizando archivo de {file_size_mb:.1f} MB..."):
+                clip = AudioFileClip(input_path)
+                # Bitrate 32k es suficiente para voz (speech-to-text) y reduce drásticamente el peso
+                clip.write_audiofile(output_path, bitrate="32k", codec='libmp3lame', logger=None)
+                clip.close()
+                if os.path.exists(input_path): os.remove(input_path)
+                return output_path
         
+        # Si ya es audio pequeño, solo renombrar/mover
         if input_path != output_path:
             if os.path.exists(output_path): os.remove(output_path)
             os.rename(input_path, output_path)
         return output_path
 
     except Exception as e:
-        st.error(f"❌ Error gestionando archivo: {e}")
+        st.error(f"Error procesando: {e}")
         return None
 
-# --- TRANSCRIPCIÓN ---
-def transcribe_audio_verbose(client, file_path, model_name):
+# --- TRANSCRIPCIÓN CON CONTEXTO ---
+def transcribe_audio_verbose(client, file_path, model_name, prompt_context=""):
     try:
-        size_mb = os.path.getsize(file_path) / (1024 * 1024)
-        if size_mb > 25:
-            st.error(f"❌ El archivo comprimido ({size_mb:.1f}MB) sigue superando el límite de 25MB de Groq.")
-            return None, None
-
         with open(file_path, "rb") as file:
+            # El parámetro 'prompt' ayuda a Whisper con nombres propios o terminología
             transcription = client.audio.transcriptions.create(
                 file=(file_path, file.read()),
                 model=model_name,
+                prompt=prompt_context, 
                 response_format="verbose_json",
                 language="es",
                 temperature=0.0
             )
         return transcription.text, transcription.segments
     except Exception as e:
-        st.error(f"❌ Error API Groq: {e}")
+        st.error(f"Error API Groq: {e}")
         return None, None
 
-# --- CORRECCIÓN ---
-def correct_text_with_llama(client, raw_text):
-    system_prompt = (
-        "Corrige ortografía y tildes. NO saludos. NO intros. NO resúmenes. "
-        "Devuelve SOLO el texto corregido idéntico en contenido."
-    )
-    try:
-        completion = client.chat.completions.create(
-            model="llama-3.1-8b-instant",
-            messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": raw_text}],
-            temperature=0.0
-        )
-        res = completion.choices[0].message.content
-        return res.replace("Aquí está el texto corregido:", "").replace("Texto corregido:", "").strip()
-    except:
-        return raw_text
-
-# --- BÚSQUEDA MEJORADA CON MÁS CONTEXTO ---
-def search_in_segments(query, segments, context_size=3):
+# --- CORRECCIÓN POR CHUNKS (MEJORA DE PRECISIÓN) ---
+def correct_text_with_llama_chunked(client, raw_text):
     """
-    Busca en segmentos con contexto configurable.
-    context_size: número de segmentos antes y después para mostrar como contexto
+    Divide el texto en trozos para asegurar que el LLM no pierda contexto
+    o resuma el contenido por falta de tokens.
     """
-    results = []
-    if not query or not segments: return results
+    # Dividir en chunks de aprox 3000 caracteres (seguro para contexto de 8k/128k)
+    chunks = textwrap.wrap(raw_text, 3000, break_long_words=False, replace_whitespace=False)
+    corrected_chunks = []
     
-    q = query.lower()
-    for i, seg in enumerate(segments):
-        if q in seg['text'].lower():
-            # Contexto previo (más amplio)
-            s_idx = max(0, i - context_size)
-            prev = " ".join([s['text'] for s in segments[s_idx:i]])
-            
-            # Contexto posterior (más amplio)
-            e_idx = min(len(segments), i + context_size + 1)
-            nxt = " ".join([s['text'] for s in segments[i+1:e_idx]])
-            
-            results.append({
-                "start": seg['start'], 
-                "formatted": format_timestamp(seg['start']),
-                "match": seg['text'], 
-                "prev": prev, 
-                "next": nxt,
-                "segment_index": i
-            })
-    return results
+    progress_bar = st.progress(0)
+    total_chunks = len(chunks)
+    
+    system_prompt = (
+        "Eres un editor experto. Tu ÚNICA tarea es corregir la puntuación, ortografía y gramática "
+        "del siguiente texto transcrito. NO resumas. NO elimines información. "
+        "NO agregues introducciones ni conclusiones. Mantén el texto completo."
+    )
 
-# --- APLICACIÓN PRINCIPAL ---
+    for i, chunk in enumerate(chunks):
+        try:
+            completion = client.chat.completions.create(
+                model="llama-3.1-8b-instant",
+                messages=[
+                    {"role": "system", "content": system_prompt}, 
+                    {"role": "user", "content": chunk}
+                ],
+                temperature=0.1
+            )
+            res = completion.choices[0].message.content.strip()
+            # Limpieza básica por si el modelo es "charlatán"
+            if res.startswith("Aquí está") or res.startswith("Texto corregido:"):
+                res = res.split(":", 1)[1].strip()
+            corrected_chunks.append(res)
+        except Exception as e:
+            corrected_chunks.append(chunk) # Fallback al original si falla
+        
+        progress_bar.progress((i + 1) / total_chunks)
+    
+    progress_bar.empty()
+    return " ".join(corrected_chunks)
+
+# --- APP PRINCIPAL ---
 def main_app():
     client = get_groq_client()
     if not client: st.stop()
 
-    # --- BARRA LATERAL ---
     with st.sidebar:
-        st.title("⚙️ Configuración")
+        st.title("⚙️ Panel de Control")
+        model_choice = st.selectbox("Modelo", ["whisper-large-v3-turbo", "whisper-large-v3"])
         
-        model_choice = st.selectbox(
-            "🎯 Modelo de Transcripción", 
-            options=["whisper-large-v3-turbo", "whisper-large-v3"],
-            help="Turbo es más rápido. V3 es más preciso."
+        st.divider()
+        st.markdown("### 🧠 Contexto para IA")
+        glossary = st.text_area(
+            "Glosario / Vocabulario", 
+            placeholder="Nombres propios, empresas, siglas técnicas... (ayuda a la precisión)",
+            height=100
         )
         
-        st.divider()
-        
-        # Control de contexto en búsqueda
-        st.markdown("#### 🔍 Configuración de Búsqueda")
-        st.session_state.context_sentences = st.slider(
-            "Oraciones de contexto",
-            min_value=1,
-            max_value=8,
-            value=3,
-            help="Cantidad de oraciones antes y después de la coincidencia"
-        )
+        enable_correction = st.toggle("Corrección Gramatical con IA", value=True)
         
         st.divider()
-        
-        large_mode = st.checkbox(
-            "📂 Modo Archivo Grande / Largo", 
-            help="Actívalo si el audio dura >40 min o pesa >25MB. Omite corrección y trunca contexto de chat."
-        )
-        
-        st.divider()
-        
-        # Estadísticas
-        if st.session_state.transcript_text:
-            st.markdown("#### 📊 Estadísticas")
-            word_count = len(st.session_state.transcript_text.split())
-            char_count = len(st.session_state.transcript_text)
-            segment_count = len(st.session_state.transcript_segments) if st.session_state.transcript_segments else 0
-            
-            st.markdown(f"""
-            <div class='stats-card'>
-                <div style='font-size: 24px; font-weight: bold;'>{word_count:,}</div>
-                <div>Palabras</div>
-            </div>
-            """, unsafe_allow_html=True)
-            st.markdown(f"**Caracteres:** {char_count:,}")
-            st.markdown(f"**Segmentos:** {segment_count}")
-        
-        st.divider()
-        
-        if st.button("🚪 Salir", use_container_width=True):
+        if st.button("🚪 Cerrar Sesión"):
             st.session_state.clear()
             st.rerun()
 
-    # --- HEADER PRINCIPAL ---
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        st.title("🎙️ Transcriptor Pro")
-        st.caption("Transcribe, busca y chatea con tus audios")
-    with col2:
-        if st.session_state.transcript_text:
-            st.success("✅ Audio procesado")
+    st.title("🎙️ Transcriptor Pro V2")
+    st.caption("Sistema de transcripción de alta fidelidad con corrección contextual")
 
-    uploaded_file = st.file_uploader(
-        "📁 Subir archivo de audio o video", 
-        type=["mp3", "mp4", "wav", "m4a", "mov", "mkv"],
-        help="Formatos soportados: MP3, MP4, WAV, M4A, MOV, MKV"
-    )
+    uploaded_file = st.file_uploader("Arrastra tu audio/video aquí", type=["mp3","mp4","wav","m4a","mov"])
 
     if uploaded_file:
-        if st.button("🚀 Procesar Audio", type="primary", use_container_width=True):
-            with st.status("⚙️ Procesando archivo...", expanded=True) as status:
-                st.write("🔍 Analizando y optimizando archivo...")
-                
+        if st.button("🚀 Iniciar Transcripción", type="primary", use_container_width=True):
+            with st.status("Procesando...", expanded=True) as status:
+                st.write("🔧 Preparando audio...")
                 final_path = process_audio_file(uploaded_file)
                 st.session_state.audio_path = final_path
                 
                 if final_path:
                     st.write(f"🎧 Transcribiendo con {model_choice}...")
-                    raw, segs = transcribe_audio_verbose(client, final_path, model_choice)
+                    # Pasamos el glosario como prompt_context
+                    raw, segs = transcribe_audio_verbose(client, final_path, model_choice, glossary)
                     
                     if raw and segs:
-                        if large_mode:
-                            st.info("ℹ️ Modo Archivo Grande: Se omite corrección ortográfica.")
-                            st.session_state.transcript_text = raw
+                        if enable_correction:
+                            st.write("✨ Aplicando corrección gramatical (Chunking)...")
+                            st.session_state.transcript_text = correct_text_with_llama_chunked(client, raw)
                         else:
-                            st.write("✨ Corrigiendo ortografía con IA...")
-                            st.session_state.transcript_text = correct_text_with_llama(client, raw)
+                            st.session_state.transcript_text = raw
                         
                         st.session_state.transcript_segments = segs
-                        st.session_state.audio_start_time = 0
                         st.session_state.search_results = None
-                        st.session_state.chat_history = []
-                        st.session_state.last_search_query = ""
-                        
-                        status.update(label="✅ ¡Procesamiento completado!", state="complete", expanded=False)
-                    else: 
-                        status.update(label="❌ Error en transcripción", state="error")
-                else: 
-                    status.update(label="❌ Error procesando archivo", state="error")
+                        status.update(label="✅ ¡Completado!", state="complete", expanded=False)
+                    else:
+                        status.update(label="❌ Error API", state="error")
 
-    # --- REPRODUCTOR PERSISTENTE (sin rerun al buscar) ---
-    if st.session_state.audio_path and os.path.exists(st.session_state.audio_path):
-        st.markdown("### 🎵 Reproductor de Audio")
+    # --- INTERFAZ DE RESULTADOS ---
+    if st.session_state.audio_path:
         st.audio(st.session_state.audio_path, start_time=st.session_state.audio_start_time)
-        st.caption("💡 Tip: El audio se mantiene en reproducción mientras buscas o navegas")
 
-    # --- CONTENIDO PRINCIPAL ---
     if st.session_state.transcript_text:
-        tab_txt, tab_chat = st.tabs(["📝 Transcripción y Búsqueda", "💬 Chat Inteligente"])
-
-        # PESTAÑA 1: TEXTO Y BÚSQUEDA MEJORADA
-        with tab_txt:
-            st.markdown("### 🔍 Búsqueda Avanzada en Transcripción")
+        tab1, tab2, tab3 = st.tabs(["📄 Texto", "🔎 Búsqueda", "💬 Chat IA"])
+        
+        with tab1:
+            st.text_area("Resultado", st.session_state.transcript_text, height=400)
+            c1, c2, c3 = st.columns(3)
+            c1.download_button("📥 TXT", st.session_state.transcript_text, "transcripcion.txt")
+            # Nueva función de exportar SRT
+            if st.session_state.transcript_segments:
+                srt_data = generate_srt(st.session_state.transcript_segments)
+                c2.download_button("🎬 Subtítulos (SRT)", srt_data, "subtitulos.srt")
+        
+        with tab2:
+            with st.form("search"):
+                query = st.text_input("Buscar frase")
+                if st.form_submit_button("Buscar"):
+                    if query and st.session_state.transcript_segments:
+                        res = []
+                        for s in st.session_state.transcript_segments:
+                            if query.lower() in s['text'].lower():
+                                res.append(s)
+                        st.session_state.search_results = res
             
-            # Formulario para evitar rerun del audio
-            with st.form(key="search_form", clear_on_submit=False):
-                col_search, col_btn = st.columns([5, 1])
-                with col_search: 
-                    search_query = st.text_input(
-                        "Palabra o frase clave", 
-                        value=st.session_state.last_search_query,
-                        placeholder="Ejemplo: 'innovación', 'proyecto importante'...",
-                        label_visibility="collapsed"
+            if st.session_state.search_results:
+                st.success(f"{len(st.session_state.search_results)} coincidencias")
+                for item in st.session_state.search_results:
+                    col_play, col_txt = st.columns([1, 6])
+                    with col_play:
+                        if st.button(f"⏱️ {format_timestamp(item['start'])}", key=item['start']):
+                            st.session_state.audio_start_time = int(item['start'])
+                            st.rerun()
+                    with col_txt:
+                        st.markdown(f"...{item['text'].replace(query, f'**{query}**')}...")
+        
+        with tab3:
+            # Chat simple implementado anteriormente
+            for msg in st.session_state.chat_history:
+                st.chat_message(msg["role"]).write(msg["content"])
+                
+            if prompt := st.chat_input("Pregunta sobre el audio"):
+                st.session_state.chat_history.append({"role": "user", "content": prompt})
+                st.chat_message("user").write(prompt)
+                
+                # Contexto limitado para el chat
+                context = st.session_state.transcript_text[:20000] # Limite para no romper el chat
+                
+                try:
+                    completion = client.chat.completions.create(
+                        model="llama-3.1-8b-instant",
+                        messages=[
+                            {"role": "system", "content": f"Contexto del audio:\n{context}"},
+                            {"role": "user", "content": prompt}
+                        ]
                     )
-                with col_btn: 
-                    st.markdown("<div style='margin-top: 0px;'></div>", unsafe_allow_html=True)
-                    submit_search = st.form_submit_button("🔎 Buscar", use_container_width=True)
-            
-            # Ejecutar búsqueda
-            if submit_search and search_query:
-                st.session_state.last_search_query = search_query
-                st.session_state.search_results = search_in_segments(
-                    search_query, 
-                    st.session_state.transcript_segments,
-                    st.session_state.context_sentences
-                )
-
-            # Mostrar resultados o mensaje de "sin resultados"
-            if st.session_state.last_search_query:
-                if st.session_state.search_results:
-                    st.success(f"✅ Se encontraron **{len(st.session_state.search_results)}** coincidencias para '{st.session_state.last_search_query}'")
-                    
-                    for i, r in enumerate(st.session_state.search_results):
-                        with st.container():
-                            b_col, t_col = st.columns([1, 8])
-                            with b_col:
-                                # Botón que actualiza el timestamp y recarga solo el reproductor
-                                if st.button(f"▶️ {r['formatted']}", key=f"jump_{i}", use_container_width=True):
-                                    st.session_state.audio_start_time = int(r['start'])
-                                    st.rerun()
-                            
-                            with t_col:
-                                st.markdown(
-                                    f"""<div class='search-result'>
-                                        <span class='context-text'>...{r['prev']}</span> 
-                                        <span class='highlight'>{r['match']}</span> 
-                                        <span class='context-text'>{r['next']}...</span>
-                                    </div>""", 
-                                    unsafe_allow_html=True
-                                )
-                    
-                    if st.button("🗑️ Limpiar resultados de búsqueda"):
-                        st.session_state.search_results = None
-                        st.session_state.last_search_query = ""
-                        st.rerun()
-                
-                else:
-                    # Mensaje cuando no hay resultados
-                    st.markdown(f"""
-                    <div class='no-results'>
-                        <strong>⚠️ Sin resultados</strong><br>
-                        No se encontraron coincidencias para "<em>{st.session_state.last_search_query}</em>".<br>
-                        <small>💡 Intenta con términos diferentes o verifica la ortografía.</small>
-                    </div>
-                    """, unsafe_allow_html=True)
-                    
-                    if st.button("🔄 Nueva búsqueda"):
-                        st.session_state.last_search_query = ""
-                        st.session_state.search_results = None
-                        st.rerun()
-            
-            st.divider()
-            
-            # Texto completo
-            st.markdown("### 📄 Texto Completo de la Transcripción")
-            st.text_area(
-                "Transcripción", 
-                value=st.session_state.transcript_text, 
-                height=500,
-                label_visibility="collapsed"
-            )
-            
-            col_d1, col_d2 = st.columns(2)
-            with col_d1:
-                st.download_button(
-                    "📥 Descargar como TXT", 
-                    st.session_state.transcript_text, 
-                    "transcripcion.txt",
-                    use_container_width=True
-                )
-            with col_d2:
-                st.download_button(
-                    "📥 Descargar como MD", 
-                    st.session_state.transcript_text, 
-                    "transcripcion.md",
-                    mime="text/markdown",
-                    use_container_width=True
-                )
-
-        # PESTAÑA 2: CHAT
-        with tab_chat:
-            st.markdown("### 💬 Chatea con tu Transcripción")
-            st.caption("Haz preguntas sobre el contenido del audio y obtén respuestas inteligentes")
-            
-            # Mostrar historial de chat
-            for m in st.session_state.chat_history:
-                with st.chat_message(m["role"]): 
-                    st.markdown(m["content"])
-            
-            # Input de chat
-            if p := st.chat_input("💭 Escribe tu pregunta aquí..."):
-                st.session_state.chat_history.append({"role": "user", "content": p})
-                with st.chat_message("user"): 
-                    st.markdown(p)
-                
-                # Preparar contexto
-                full_text = st.session_state.transcript_text
-                
-                if large_mode:
-                    chat_context = full_text[:15000] + "\n\n...(texto truncado para evitar límites de contexto)..."
-                else:
-                    chat_context = full_text
-
-                with st.chat_message("assistant"):
-                    holder = st.empty()
-                    full = ""
-                    try:
-                        stream = client.chat.completions.create(
-                            model="llama-3.1-8b-instant",
-                            messages=[
-                                {"role": "system", "content": f"Eres un asistente experto en analizar transcripciones. Responde de forma clara y precisa basándote en el siguiente contexto:\n\n{chat_context}"},
-                                {"role": "user", "content": p}
-                            ], 
-                            stream=True,
-                            temperature=0.3
-                        )
-                        for chunk in stream:
-                            if chunk.choices[0].delta.content:
-                                full += chunk.choices[0].delta.content
-                                holder.markdown(full + "▌")
-                        holder.markdown(full)
-                        st.session_state.chat_history.append({"role": "assistant", "content": full})
-                    except Exception as e: 
-                        st.error(f"❌ Error en el chat: {e}")
-            
-            # Botón para limpiar chat
-            if st.session_state.chat_history:
-                if st.button("🗑️ Limpiar historial de chat"):
-                    st.session_state.chat_history = []
-                    st.rerun()
+                    response = completion.choices[0].message.content
+                    st.session_state.chat_history.append({"role": "assistant", "content": response})
+                    st.chat_message("assistant").write(response)
+                except Exception as e:
+                    st.error(f"Error chat: {e}")
 
 if __name__ == "__main__":
-    if check_password(): main_app()
+    if check_password():
+        main_app()
