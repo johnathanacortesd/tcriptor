@@ -104,9 +104,9 @@ def fuzzy_search_score(query, text):
     """Calcula similitud para búsqueda difusa"""
     return SequenceMatcher(None, normalize_text(query), normalize_text(text)).ratio()
 
-# --- SEGURIDAD (CORREGIDA DEFINITIVAMENTE) ---
+# --- SEGURIDAD (MODIFICADO PARA ENTER) ---
 def check_password():
-    """Sistema de autenticación sin doble clic"""
+    """Sistema de autenticación con soporte para tecla Enter"""
     if st.session_state.authenticated: 
         return True
     
@@ -114,21 +114,23 @@ def check_password():
     col1, col2, col3 = st.columns([1, 2, 1])
     
     with col2:
-        # Usar key único para evitar conflictos
-        password_input = st.text_input(
-            "Contraseña", 
-            type="password", 
-            key=f"pwd_{st.session_state.password_attempts}"
-        )
-        
-        if st.button("Ingresar", use_container_width=True, key="login_btn"):
+        # Usamos un st.form para permitir el envío con Enter
+        with st.form("login_form"):
+            password_input = st.text_input(
+                "Contraseña", 
+                type="password", 
+                key=f"pwd_{st.session_state.password_attempts}"
+            )
+            # st.form_submit_button habilita el Enter dentro del form
+            submit_button = st.form_submit_button("Ingresar", use_container_width=True)
+            
+        if submit_button:
             try:
                 correct_password = st.secrets["general"]["app_password"]
                 if password_input == correct_password:
                     st.session_state.authenticated = True
                     st.success("✅ Acceso concedido")
                     st.balloons()
-                    # Incrementar contador para forzar nuevo key en próximo intento si falla
                     st.session_state.password_attempts += 1
                     st.rerun()
                 else: 
@@ -149,7 +151,7 @@ def get_groq_client():
         st.error("❌ Error: No se encontró 'groq_api_key' en secrets.toml")
         return None
 
-# --- PROCESAMIENTO DE ARCHIVOS (MEJORADO) ---
+# --- PROCESAMIENTO DE ARCHIVOS ---
 def process_audio_file(uploaded_file):
     """Procesamiento optimizado con mejor manejo de errores"""
     try:
@@ -200,7 +202,7 @@ def process_audio_file(uploaded_file):
         st.error(f"❌ Error procesando archivo: {e}")
         return None
 
-# --- TRANSCRIPCIÓN MEJORADA ---
+# --- TRANSCRIPCIÓN ---
 def transcribe_audio_verbose(client, file_path, model_name, enable_punctuation=True):
     """Transcripción con parámetros optimizados"""
     try:
@@ -228,7 +230,7 @@ def transcribe_audio_verbose(client, file_path, model_name, enable_punctuation=T
         st.error(f"❌ Error API Groq: {e}")
         return None, None
 
-# --- CORRECCIÓN MEJORADA ---
+# --- CORRECCIÓN ---
 def correct_text_with_llama(client, raw_text):
     """Corrección más inteligente con mejor prompt"""
     system_prompt = """Eres un corrector ortográfico experto en español.
@@ -308,7 +310,7 @@ def search_in_segments(query, segments, context_size=3, fuzzy_threshold=0.7):
     results.sort(key=lambda x: x['score'], reverse=True)
     return results
 
-# --- EXPORTACIÓN MEJORADA ---
+# --- EXPORTACIÓN ---
 def export_with_timestamps(segments):
     """Exporta transcripción con timestamps"""
     output = []
@@ -323,7 +325,7 @@ def main_app():
     if not client: 
         st.stop()
 
-    # --- BARRA LATERAL MEJORADA ---
+    # --- BARRA LATERAL ---
     with st.sidebar:
         st.title("⚙️ Configuración")
         
@@ -481,31 +483,39 @@ def main_app():
             "📥 Exportar"
         ])
 
-        # TAB 1: BÚSQUEDA MEJORADA
+        # TAB 1: BÚSQUEDA MEJORADA (MODIFICADO PARA ENTER)
         with tab_txt:
             st.markdown("### 🔍 Búsqueda Inteligente")
             
-            # Búsqueda SIN FORMULARIO para evitar reload del audio
-            col_s, col_b = st.columns([5, 1])
-            with col_s: 
-                search_query = st.text_input(
-                    "Buscar en transcripción", 
-                    value=st.session_state.last_search_query,
-                    placeholder="Ej: 'innovación tecnológica', 'resultados financieros'...",
-                    label_visibility="collapsed",
-                    key="search_input"
-                )
-            with col_b:
-                # Botón simple sin formulario
-                if st.button("🔎", use_container_width=True, key="search_btn"):
-                    if search_query:
-                        st.session_state.last_search_query = search_query
-                        st.session_state.search_results = search_in_segments(
-                            search_query, 
-                            st.session_state.transcript_segments,
-                            st.session_state.context_sentences,
-                            fuzzy_threshold if enable_fuzzy else 1.0
-                        )
+            # Usamos st.form para habilitar la tecla ENTER al buscar
+            with st.form(key="search_form", clear_on_submit=False):
+                col_s, col_b = st.columns([5, 1])
+                with col_s: 
+                    search_query = st.text_input(
+                        "Buscar en transcripción", 
+                        value=st.session_state.last_search_query,
+                        placeholder="Ej: 'innovación tecnológica', 'resultados financieros'...",
+                        label_visibility="collapsed",
+                        key="search_input_widget"
+                    )
+                with col_b:
+                    # Este botón se activa al presionar Enter en el campo de texto
+                    submit_search = st.form_submit_button("🔎", use_container_width=True)
+
+            if submit_search:
+                if search_query:
+                    st.session_state.last_search_query = search_query
+                    st.session_state.search_results = search_in_segments(
+                        search_query, 
+                        st.session_state.transcript_segments,
+                        st.session_state.context_sentences,
+                        fuzzy_threshold if enable_fuzzy else 1.0
+                    )
+                else:
+                    # Si se envía vacío, limpiar
+                    st.session_state.search_results = None
+                    st.session_state.last_search_query = ""
+                    st.rerun()
 
             # Mostrar resultados
             if st.session_state.last_search_query:
