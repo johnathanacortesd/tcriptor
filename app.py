@@ -1,6 +1,7 @@
 import streamlit as st
 import os
 import tempfile
+import unicodedata
 from groq import Groq
 from moviepy.editor import AudioFileClip
 import re
@@ -24,6 +25,7 @@ st.markdown("""
         border-left: 5px solid #ff4b4b;
         box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         transition: all 0.3s ease;
+        color: #333;
     }
     .search-result:hover {
         transform: translateX(5px);
@@ -42,12 +44,15 @@ st.markdown("""
         font-style: italic;
         line-height: 1.6;
     }
+    /* --- ESTILO MODIFICADO: FONDO NEGRO LETRA BLANCA --- */
     .no-results {
-        background-color: #fff3cd;
-        border-left: 5px solid #ffc107;
+        background-color: #000000;
+        color: #ffffff;
+        border-left: 5px solid #ff4b4b;
         padding: 15px;
         border-radius: 8px;
         margin: 15px 0;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.3);
     }
     .stats-card {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -95,16 +100,22 @@ def format_timestamp(seconds):
     return f"{minutes:02d}:{secs:02d}"
 
 def normalize_text(text):
-    """Normaliza texto para búsqueda más flexible"""
-    import unicodedata
-    text = ''.join(c for c in unicodedata.normalize('NFD', text) if unicodedata.category(c) != 'Mn')
+    """
+    Normaliza texto eliminando tildes y diacríticos para búsqueda robusta.
+    Ejemplo: 'Popayán' -> 'popayan'
+    """
+    if not isinstance(text, str):
+        return ""
+    # Descomponer caracteres unicode y eliminar marcas (tildes, diéresis)
+    text = unicodedata.normalize('NFD', text)
+    text = ''.join(c for c in text if unicodedata.category(c) != 'Mn')
     return text.lower().strip()
 
 def fuzzy_search_score(query, text):
-    """Calcula similitud para búsqueda difusa"""
+    """Calcula similitud basándose en texto normalizado"""
     return SequenceMatcher(None, normalize_text(query), normalize_text(text)).ratio()
 
-# --- SEGURIDAD (MODIFICADO PARA ENTER) ---
+# --- SEGURIDAD ---
 def check_password():
     """Sistema de autenticación con soporte para tecla Enter"""
     if st.session_state.authenticated: 
@@ -114,14 +125,12 @@ def check_password():
     col1, col2, col3 = st.columns([1, 2, 1])
     
     with col2:
-        # Usamos un st.form para permitir el envío con Enter
         with st.form("login_form"):
             password_input = st.text_input(
                 "Contraseña", 
                 type="password", 
                 key=f"pwd_{st.session_state.password_attempts}"
             )
-            # st.form_submit_button habilita el Enter dentro del form
             submit_button = st.form_submit_button("Ingresar", use_container_width=True)
             
         if submit_button:
@@ -138,7 +147,6 @@ def check_password():
                     st.session_state.password_attempts += 1
             except KeyError:
                 st.error("❌ Error: No se encontró 'app_password' en secrets.toml")
-                st.info("💡 Verifica que tu archivo secrets.toml contenga:\n```\n[general]\napp_password = \"tu_contraseña\"\ngroq_api_key = \"tu_api_key\"\n```")
             except Exception as e:
                 st.error(f"❌ Error inesperado: {str(e)}")
     
@@ -151,9 +159,12 @@ def get_groq_client():
         st.error("❌ Error: No se encontró 'groq_api_key' en secrets.toml")
         return None
 
-# --- PROCESAMIENTO DE ARCHIVOS ---
+# --- PROCESAMIENTO DE ARCHIVOS OPTIMIZADO ---
 def process_audio_file(uploaded_file):
-    """Procesamiento optimizado con mejor manejo de errores"""
+    """
+    Procesamiento optimizado para máxima compresión compatible con Whisper.
+    Reduce tamaño de archivos grandes >25MB convirtiendo a mono y bajo bitrate.
+    """
     try:
         temp_dir = tempfile.gettempdir()
         safe_name = "".join([c for c in uploaded_file.name if c.isalnum() or c in ('.','_')]).strip()
@@ -166,32 +177,41 @@ def process_audio_file(uploaded_file):
         file_size_mb = os.path.getsize(input_path) / (1024 * 1024)
         is_video = input_path.lower().endswith(('.mp4', '.m4v', '.mov', '.mkv', '.avi', '.flv'))
         
-        st.info(f"📊 Archivo: {file_size_mb:.1f} MB | Tipo: {'Video' if is_video else 'Audio'}")
+        st.info(f"📊 Archivo original: {file_size_mb:.1f} MB | Tipo: {'Video' if is_video else 'Audio'}")
         
+        # Convertimos si es video O si el audio es muy pesado (>24MB para dejar margen)
         if is_video or file_size_mb > 24.0:
-            status_text = f"🔄 Optimizando archivo de {file_size_mb:.1f} MB..."
+            status_text = f"🔄 Optimizando archivo de {file_size_mb:.1f} MB para transcripción..."
             with st.spinner(status_text):
                 try:
                     clip = AudioFileClip(input_path)
+                    
+                    # Configuración agresiva pero segura para Whisper:
+                    # - 32k bitrate (suficiente para voz)
+                    # - Mono (1 canal)
+                    # - 16000 Hz (frecuencia nativa de Whisper)
                     clip.write_audiofile(
                         output_path, 
-                        bitrate="48k",
+                        bitrate="32k",    # Bitrate bajo para reducir peso
                         nbytes=2, 
                         codec='libmp3lame', 
-                        ffmpeg_params=["-ac", "1", "-ar", "16000"],
+                        ffmpeg_params=["-ac", "1", "-ar", "16000"], # Mono, 16khz
                         logger=None
                     )
                     clip.close()
+                    
+                    # Eliminar original pesado
                     if os.path.exists(input_path): 
                         os.remove(input_path)
                     
                     new_size = os.path.getsize(output_path) / (1024 * 1024)
-                    st.success(f"✅ Comprimido: {file_size_mb:.1f} MB → {new_size:.1f} MB")
+                    st.success(f"✅ Comprimido exitosamente: {file_size_mb:.1f} MB → {new_size:.1f} MB")
                     return output_path
                 except Exception as e:
                     st.error(f"❌ Error en conversión: {e}")
                     return None
         
+        # Si es un audio pequeño, solo lo renombramos si es necesario
         if input_path != output_path:
             if os.path.exists(output_path): 
                 os.remove(output_path)
@@ -204,11 +224,11 @@ def process_audio_file(uploaded_file):
 
 # --- TRANSCRIPCIÓN ---
 def transcribe_audio_verbose(client, file_path, model_name, enable_punctuation=True):
-    """Transcripción con parámetros optimizados"""
+    """Transcripción usando API de Groq"""
     try:
         size_mb = os.path.getsize(file_path) / (1024 * 1024)
         if size_mb > 25:
-            st.error(f"❌ Archivo ({size_mb:.1f}MB) supera el límite de 25MB de Groq.")
+            st.error(f"❌ El archivo optimizado ({size_mb:.1f}MB) sigue superando el límite de 25MB de Groq. Intenta recortarlo.")
             return None, None
 
         with open(file_path, "rb") as file:
@@ -221,7 +241,7 @@ def transcribe_audio_verbose(client, file_path, model_name, enable_punctuation=T
             }
             
             if enable_punctuation:
-                params["prompt"] = "Transcripción en español con puntuación correcta, tildes y mayúsculas apropiadas."
+                params["prompt"] = "Transcripción en español, nombres propios como Popayán, Bogotá con tildes."
             
             transcription = client.audio.transcriptions.create(**params)
             
@@ -232,22 +252,15 @@ def transcribe_audio_verbose(client, file_path, model_name, enable_punctuation=T
 
 # --- CORRECCIÓN ---
 def correct_text_with_llama(client, raw_text):
-    """Corrección más inteligente con mejor prompt"""
+    """Corrección ortográfica con Llama 3"""
     system_prompt = """Eres un corrector ortográfico experto en español.
 
 TAREA:
 - Corrige SOLO ortografía, tildes, puntuación y mayúsculas
+- Asegúrate de poner tildes en ciudades y nombres (ej: Popayán, Bogotá, Medellín)
 - Mantén el CONTENIDO EXACTO original
-- NO modifiques palabras técnicas, nombres propios o términos específicos
-- NO agregues introducciones, saludos ni comentarios
-- Devuelve ÚNICAMENTE el texto corregido
-
-REGLAS:
-1. Conserva todas las palabras originales
-2. Corrige tildes según RAE
-3. Ajusta mayúsculas al inicio de oraciones y nombres propios
-4. Mejora puntuación para claridad
-5. Respeta el orden y estructura original"""
+- NO modifiques palabras técnicas
+- Devuelve ÚNICAMENTE el texto corregido"""
 
     try:
         completion = client.chat.completions.create(
@@ -261,6 +274,7 @@ REGLAS:
         )
         result = completion.choices[0].message.content
         
+        # Limpieza de respuestas conversacionales del modelo
         for prefix in ["Aquí está el texto corregido:", "Texto corregido:", "Corrección:"]:
             result = result.replace(prefix, "")
         
@@ -269,18 +283,24 @@ REGLAS:
         st.warning(f"⚠️ Corrección omitida: {e}")
         return raw_text
 
-# --- BÚSQUEDA MEJORADA CON FUZZY MATCHING ---
+# --- BÚSQUEDA MEJORADA (SOLUCIÓN A TILDES) ---
 def search_in_segments(query, segments, context_size=3, fuzzy_threshold=0.7):
-    """Búsqueda mejorada con coincidencias exactas y difusas"""
+    """
+    Búsqueda que ignora tildes en la comparación pero respeta el texto original.
+    """
     results = []
     if not query or not segments: 
         return results
     
+    # 1. Normalizar la consulta (ej: "Popayán" -> "popayan")
     query_normalized = normalize_text(query)
     
     for i, seg in enumerate(segments):
-        text_normalized = normalize_text(seg['text'])
+        # 2. Normalizar el segmento del texto (ej: "...en Popayán..." -> "...en popayan...")
+        text_original = seg['text']
+        text_normalized = normalize_text(text_original)
         
+        # 3. Comparar las versiones normalizadas
         is_exact_match = query_normalized in text_normalized
         fuzzy_score = fuzzy_search_score(query_normalized, text_normalized)
         is_fuzzy_match = fuzzy_score >= fuzzy_threshold
@@ -298,7 +318,7 @@ def search_in_segments(query, segments, context_size=3, fuzzy_threshold=0.7):
             results.append({
                 "start": seg['start'], 
                 "formatted": format_timestamp(seg['start']),
-                "match": seg['text'], 
+                "match": text_original,  # Mostramos el texto original con tildes
                 "prev": prev, 
                 "next": nxt,
                 "segment_index": i,
@@ -312,7 +332,6 @@ def search_in_segments(query, segments, context_size=3, fuzzy_threshold=0.7):
 
 # --- EXPORTACIÓN ---
 def export_with_timestamps(segments):
-    """Exporta transcripción con timestamps"""
     output = []
     for seg in segments:
         timestamp = format_timestamp(seg['start'])
@@ -379,7 +398,7 @@ def main_app():
         
         large_mode = st.checkbox(
             "📂 Modo Archivo Grande", 
-            help="Para audios >40 min o >25MB"
+            help="Recomendado si el audio dura más de 1 hora"
         )
         
         st.divider()
@@ -432,7 +451,6 @@ def main_app():
 
     if uploaded_file:
         if st.button("🚀 Iniciar Transcripción", type="primary", use_container_width=True):
-            # LIMPIAR BÚSQUEDA AL SUBIR NUEVO AUDIO
             st.session_state.search_results = None
             st.session_state.last_search_query = ""
             
@@ -453,7 +471,7 @@ def main_app():
                     
                     if raw and segs:
                         if large_mode:
-                            st.info("ℹ️ Modo Grande: Corrección ortográfica omitida")
+                            st.info("ℹ️ Modo Grande: Corrección ortográfica omitida para ahorrar tiempo")
                             st.session_state.transcript_text = raw
                         else:
                             st.write("✨ Mejorando ortografía con IA...")
@@ -483,7 +501,7 @@ def main_app():
             "📥 Exportar"
         ])
 
-        # TAB 1: BÚSQUEDA MEJORADA (MODIFICADO PARA ENTER)
+        # TAB 1: BÚSQUEDA MEJORADA
         with tab_txt:
             st.markdown("### 🔍 Búsqueda Inteligente")
             
@@ -494,12 +512,11 @@ def main_app():
                     search_query = st.text_input(
                         "Buscar en transcripción", 
                         value=st.session_state.last_search_query,
-                        placeholder="Ej: 'innovación tecnológica', 'resultados financieros'...",
+                        placeholder="Ej: 'popayan', 'tecnología'...",
                         label_visibility="collapsed",
                         key="search_input_widget"
                     )
                 with col_b:
-                    # Este botón se activa al presionar Enter en el campo de texto
                     submit_search = st.form_submit_button("🔎", use_container_width=True)
 
             if submit_search:
@@ -512,7 +529,6 @@ def main_app():
                         fuzzy_threshold if enable_fuzzy else 1.0
                     )
                 else:
-                    # Si se envía vacío, limpiar
                     st.session_state.search_results = None
                     st.session_state.last_search_query = ""
                     st.rerun()
@@ -555,7 +571,7 @@ def main_app():
                     <div class='no-results'>
                         <strong>⚠️ Sin resultados</strong><br>
                         No se encontró "<em>{st.session_state.last_search_query}</em>"<br>
-                        <small>💡 Tip: {'La búsqueda inteligente está activa' if enable_fuzzy else 'Activa búsqueda inteligente en el menú'}</small>
+                        <small>💡 Tip: {'La búsqueda inteligente está activa (ignorando tildes)' if enable_fuzzy else 'Activa búsqueda inteligente en el menú'}</small>
                     </div>
                     """, unsafe_allow_html=True)
                     
@@ -573,7 +589,7 @@ def main_app():
                 label_visibility="collapsed"
             )
 
-        # TAB 2: CHAT MEJORADO
+        # TAB 2: CHAT
         with tab_chat:
             st.markdown("### 💬 Asistente IA")
             st.caption("Haz preguntas inteligentes sobre el contenido")
@@ -604,9 +620,7 @@ CONTEXTO DE LA TRANSCRIPCIÓN:
 INSTRUCCIONES:
 - Responde basándote ÚNICAMENTE en el contenido de la transcripción
 - Si no encuentras información, dilo claramente
-- Cita fragmentos relevantes cuando sea apropiado
-- Sé conciso pero completo
-- Usa formato markdown para claridad"""},
+- Sé conciso pero completo"""},
                                 {"role": "user", "content": p}
                             ], 
                             stream=True,
