@@ -44,6 +44,12 @@ st.markdown("""
         font-style: italic;
         line-height: 1.6;
     }
+    .match-text {
+        color: #000;
+        font-weight: 500;
+        line-height: 1.8;
+        font-size: 1.05em;
+    }
     .no-results {
         background-color: #fff3cd;
         border-left: 5px solid #ffc107;
@@ -124,56 +130,43 @@ def get_file_hash(file_bytes):
     """Genera hash único para el archivo"""
     return hashlib.md5(file_bytes).hexdigest()
 
-def highlight_match_in_text(text, query):
+def highlight_text(text, query):
     """
-    Resalta la consulta dentro del texto usando HTML
-    Maneja búsquedas exactas e inexactas
+    Resalta la consulta dentro del texto de forma inteligente
+    Busca coincidencias parciales y completas
     """
     if not query or not text:
         return text
     
     # Normalizar para búsqueda
-    text_normalized = normalize_text(text)
-    query_normalized = normalize_text(query)
+    text_lower = text.lower()
+    query_lower = query.lower()
     
-    # Intentar encontrar coincidencia exacta primero
-    if query_normalized in text_normalized:
-        # Encontrar la posición en el texto normalizado
-        start_pos = text_normalized.find(query_normalized)
-        end_pos = start_pos + len(query_normalized)
-        
-        # Extraer la parte original del texto (con mayúsculas/tildes)
-        before = text[:start_pos]
-        match = text[start_pos:end_pos]
-        after = text[end_pos:]
-        
+    # Intentar coincidencia exacta de la frase completa
+    if query_lower in text_lower:
+        # Encontrar posición en texto normalizado
+        pos = text_lower.find(query_lower)
+        before = text[:pos]
+        match = text[pos:pos + len(query)]
+        after = text[pos + len(query):]
         return f"{before}<span class='highlight'>{match}</span>{after}"
     
     # Si no hay coincidencia exacta, buscar palabras individuales
-    query_words = query_normalized.split()
-    result_text = text
+    query_words = [w for w in query_lower.split() if len(w) > 2]
     
+    if not query_words:
+        return text
+    
+    # Buscar la primera palabra significativa que coincida
     for word in query_words:
-        if len(word) > 2:  # Solo palabras de 3+ caracteres
-            # Buscar la palabra en el texto original
-            pattern = re.compile(re.escape(word), re.IGNORECASE)
-            matches = list(pattern.finditer(normalize_text(result_text)))
-            
-            if matches:
-                # Tomar la primera coincidencia
-                match = matches[0]
-                start = match.start()
-                end = match.end()
-                
-                # Extraer del texto original
-                before = result_text[:start]
-                matched_word = result_text[start:end]
-                after = result_text[end:]
-                
-                result_text = f"{before}<span class='highlight'>{matched_word}</span>{after}"
-                break  # Solo resaltar la primera palabra encontrada
+        if word in text_lower:
+            pos = text_lower.find(word)
+            before = text[:pos]
+            match = text[pos:pos + len(word)]
+            after = text[pos + len(word):]
+            return f"{before}<span class='highlight'>{match}</span>{after}"
     
-    return result_text
+    return text
 
 # --- SEGURIDAD ---
 def check_password():
@@ -276,13 +269,12 @@ def transcribe_audio_precision(client, file_path, model_name, enable_timestamps=
         with st.spinner(f"🎧 Transcribiendo con {model_name}..."):
             with open(file_path, "rb") as file:
                 # Parámetros optimizados para máxima precisión
-                # SIN PROMPT para evitar que se filtre en la transcripción
                 params = {
                     "file": (os.path.basename(file_path), file.read()),
                     "model": model_name,
                     "response_format": "verbose_json",
                     "language": "es",
-                    "temperature": 0.0  # Máxima determinismo
+                    "temperature": 0.0
                 }
                 
                 transcription = client.audio.transcriptions.create(**params)
@@ -339,24 +331,22 @@ def correct_orthography_only(client, raw_text, segments, max_chunk_size=6000):
     
     # Crear segmentos corregidos manteniendo los timestamps
     corrected_segments = []
-    corrected_sentences = corrected_text.replace('. ', '.|').replace('? ', '?|').replace('! ', '!|').split('|')
+    for seg in segments:
+        # Mantener la estructura original del segmento
+        corrected_segments.append({
+            'start': seg['start'],
+            'end': seg['end'],
+            'text': seg['text']  # Inicialmente usar el original
+        })
     
-    # Mapear oraciones corregidas a los segmentos originales
-    for i, seg in enumerate(segments):
-        if i < len(corrected_sentences):
-            corrected_segments.append({
-                'start': seg['start'],
-                'end': seg['end'],
-                'text': corrected_sentences[i].strip()
-            })
-        else:
-            # Si no hay correspondencia, usar el original
-            corrected_segments.append(seg)
+    # Intentar mapear las correcciones a los segmentos
+    # Este es un enfoque simplificado - en producción podrías usar algo más sofisticado
+    corrected_sentences = re.split(r'[.!?]+', corrected_text)
+    corrected_sentences = [s.strip() for s in corrected_sentences if s.strip()]
     
-    # Si hay más oraciones corregidas que segmentos, fusionar
-    if len(corrected_sentences) > len(segments):
-        # Tomar solo las primeras N que coinciden con los segmentos
-        corrected_segments = corrected_segments[:len(segments)]
+    # Mapear segmentos corregidos (uno a uno si es posible)
+    for i in range(min(len(corrected_segments), len(corrected_sentences))):
+        corrected_segments[i]['text'] = corrected_sentences[i]
     
     return corrected_text, corrected_segments
 
@@ -395,7 +385,7 @@ Salida: "Entonces eh nosotros fuimos a ver la película y estuvo muy buena"
                 {"role": "system", "content": system_prompt}, 
                 {"role": "user", "content": f"Corrige SOLO ortografía y tildes:\n\n{text_chunk}"}
             ],
-            temperature=0.0,  # Máxima determinismo
+            temperature=0.0,
             max_tokens=8000
         )
         
@@ -421,11 +411,13 @@ Salida: "Entonces eh nosotros fuimos a ver la película y estuvo muy buena"
         return text_chunk
 
 # --- BÚSQUEDA MEJORADA ---
-def search_in_segments(query, segments, corrected_segments, context_size=3, fuzzy_threshold=0.7):
+def search_in_segments(query, segments, corrected_segments, context_size=2, fuzzy_threshold=0.7):
     """
-    Búsqueda mejorada con coincidencias exactas y difusas
-    Usa segments originales para búsqueda pero muestra corrected_segments con tildes
-    MEJORADO: Ahora resalta correctamente la palabra encontrada en el contexto
+    Búsqueda MEJORADA con contexto correcto
+    - Busca en segmentos originales para mayor cobertura
+    - Muestra segmentos corregidos con tildes
+    - Construye contexto correctamente alrededor del segmento encontrado
+    - Resalta el término encontrado
     """
     results = []
     if not query or not segments: 
@@ -436,44 +428,58 @@ def search_in_segments(query, segments, corrected_segments, context_size=3, fuzz
     for i, seg in enumerate(segments):
         text_normalized = normalize_text(seg['text'])
         
+        # Verificar si hay coincidencia
         is_exact_match = query_normalized in text_normalized
         fuzzy_score = fuzzy_search_score(query_normalized, text_normalized)
         is_fuzzy_match = fuzzy_score >= fuzzy_threshold
         
         if is_exact_match or is_fuzzy_match:
-            # Obtener contexto de los segmentos corregidos
-            s_idx = max(0, i - context_size)
-            prev_segments = [corrected_segments[j]['text'] if j < len(corrected_segments) else segments[j]['text'] 
-                            for j in range(s_idx, i)]
-            prev_text = " ".join(prev_segments)
+            # Usar segmento corregido si está disponible
+            if i < len(corrected_segments):
+                current_segment = corrected_segments[i]
+            else:
+                current_segment = seg
             
-            e_idx = min(len(segments), i + context_size + 1)
-            next_segments = [corrected_segments[j]['text'] if j < len(corrected_segments) else segments[j]['text']
-                            for j in range(i+1, e_idx)]
-            next_text = " ".join(next_segments)
+            # Construir contexto ANTERIOR (segmentos previos)
+            prev_context_parts = []
+            for j in range(max(0, i - context_size), i):
+                if j < len(corrected_segments):
+                    prev_context_parts.append(corrected_segments[j]['text'])
+                else:
+                    prev_context_parts.append(segments[j]['text'])
+            prev_context = " ".join(prev_context_parts)
             
-            # Usar el segmento corregido para el texto principal
-            match_text = corrected_segments[i]['text'] if i < len(corrected_segments) else seg['text']
+            # Construir contexto POSTERIOR (segmentos siguientes)
+            next_context_parts = []
+            for j in range(i + 1, min(len(segments), i + context_size + 1)):
+                if j < len(corrected_segments):
+                    next_context_parts.append(corrected_segments[j]['text'])
+                else:
+                    next_context_parts.append(segments[j]['text'])
+            next_context = " ".join(next_context_parts)
             
-            # CLAVE: Resaltar la consulta en el texto del match
-            match_text_highlighted = highlight_match_in_text(match_text, query)
+            # Resaltar el término en el segmento actual
+            match_text_highlighted = highlight_text(current_segment['text'], query)
             
+            # Determinar tipo de coincidencia y confianza
             match_type = "exact" if is_exact_match else "fuzzy"
             confidence = "high" if is_exact_match else ("medium" if fuzzy_score >= 0.85 else "low")
             
             results.append({
                 "start": seg['start'], 
+                "end": seg['end'],
                 "formatted": format_timestamp(seg['start']),
-                "match": match_text_highlighted,  # Texto con resaltado HTML
-                "match_plain": match_text,  # Texto sin resaltado (para otros usos)
-                "prev": prev_text, 
-                "next": next_text,
+                "match": match_text_highlighted,
+                "match_plain": current_segment['text'],
+                "prev": prev_context, 
+                "next": next_context,
                 "segment_index": i,
                 "match_type": match_type,
                 "confidence": confidence,
                 "score": fuzzy_score if is_fuzzy_match else 1.0
             })
     
+    # Ordenar por puntuación de relevancia
     results.sort(key=lambda x: x['score'], reverse=True)
     return results
 
@@ -537,11 +543,11 @@ def main_app():
         
         st.markdown("#### 🔍 Configuración de Búsqueda")
         st.session_state.context_sentences = st.slider(
-            "Oraciones de contexto",
+            "Segmentos de contexto",
             min_value=1,
-            max_value=10,
-            value=3,
-            help="Cantidad de oraciones antes y después"
+            max_value=5,
+            value=2,
+            help="Cantidad de segmentos antes y después del resultado"
         )
         
         enable_fuzzy = st.checkbox(
@@ -618,7 +624,7 @@ def main_app():
         - ✅ **Temperatura 0**: Máxima determinismo en la transcripción
         - ✅ **Modelo V3**: Mejor precisión disponible
         - ✅ **Corrección conservadora**: Solo tildes y puntuación, NO modifica palabras
-        - ✅ **Búsqueda mejorada**: Resalta exactamente la palabra encontrada
+        - ✅ **Búsqueda mejorada**: Muestra contexto correcto y resalta exactamente la palabra encontrada
         
         **Límites de Groq API:**
         - Tamaño máximo: 25MB
@@ -683,7 +689,7 @@ def main_app():
                                 st.session_state.correction_applied = True
                             else:
                                 st.session_state.transcript_text = raw
-                                st.session_state.corrected_segments = segs  # Usar los originales
+                                st.session_state.corrected_segments = segs
                                 st.session_state.correction_applied = False
                             
                             st.session_state.audio_start_time = 0
@@ -692,351 +698,4 @@ def main_app():
                             status.update(label="✅ ¡Completado!", state="complete", expanded=False)
                             st.balloons()
                         else: 
-                            status.update(label="❌ Error en transcripción", state="error")
-                    else: 
-                        status.update(label="❌ Error procesando archivo", state="error")
-
-    # --- REPRODUCTOR ---
-    if st.session_state.audio_path and os.path.exists(st.session_state.audio_path):
-        st.markdown("### 🎵 Reproductor")
-        st.audio(st.session_state.audio_path, start_time=st.session_state.audio_start_time)
-
-    # --- TABS PRINCIPALES ---
-    if st.session_state.transcript_text:
-        tab_txt, tab_compare, tab_chat, tab_export = st.tabs([
-            "📝 Transcripción & Búsqueda", 
-            "🔄 Comparar Versiones",
-            "💬 Chat IA", 
-            "📥 Exportar"
-        ])
-
-        # TAB 1: TRANSCRIPCIÓN Y BÚSQUEDA
-        with tab_txt:
-            st.markdown("### 🔍 Búsqueda Inteligente")
-            
-            with st.form(key="search_form", clear_on_submit=False):
-                col_s, col_b = st.columns([5, 1])
-                with col_s: 
-                    search_query = st.text_input(
-                        "Buscar en transcripción", 
-                        value=st.session_state.last_search_query,
-                        placeholder="Ej: 'innovación tecnológica', 'resultados financieros'...",
-                        label_visibility="collapsed",
-                        key="search_input_widget"
-                    )
-                with col_b:
-                    submit_search = st.form_submit_button("🔎", use_container_width=True)
-
-            if submit_search:
-                if search_query:
-                    st.session_state.last_search_query = search_query
-                    # Usar los segmentos corregidos para mostrar resultados con tildes
-                    st.session_state.search_results = search_in_segments(
-                        search_query, 
-                        st.session_state.transcript_segments,
-                        st.session_state.corrected_segments,
-                        st.session_state.context_sentences,
-                        fuzzy_threshold if enable_fuzzy else 1.0
-                    )
-                else:
-                    st.session_state.search_results = None
-                    st.session_state.last_search_query = ""
-                    st.rerun()
-
-            # Mostrar resultados
-            if st.session_state.last_search_query:
-                if st.session_state.search_results:
-                    st.success(f"✅ **{len(st.session_state.search_results)}** resultados para '{st.session_state.last_search_query}'")
-                    
-                    for i, r in enumerate(st.session_state.search_results):
-                        with st.container():
-                            col_btn, col_text = st.columns([1, 8])
-                            
-                            with col_btn:
-                                if st.button(f"▶️ {r['formatted']}", key=f"j_{i}", use_container_width=True):
-                                    st.session_state.audio_start_time = int(r['start'])
-                                    st.rerun()
-                            
-                            with col_text:
-                                confidence_class = f"confidence-{r['confidence']}"
-                                confidence_text = {"high": "Exacto", "medium": "Probable", "low": "Similar"}[r['confidence']]
-                                
-                                st.markdown(
-                                    f"""<div class='search-result'>
-                                        <span class='confidence-badge {confidence_class}'>{confidence_text}</span>
-                                        <br><br>
-                                        <span class='context-text'>...{r['prev']}</span> 
-                                        {r['match']} 
-                                        <span class='context-text'>{r['next']}...</span>
-                                    </div>""", 
-                                    unsafe_allow_html=True
-                                )
-                    
-                    if st.button("🗑️ Limpiar búsqueda", key="clear_search"):
-                        st.session_state.search_results = None
-                        st.session_state.last_search_query = ""
-                        st.rerun()
-                else:
-                    st.markdown(f"""
-                    <div class='no-results'>
-                        <strong>⚠️ Sin resultados</strong><br>
-                        No se encontró "<em>{st.session_state.last_search_query}</em>"<br>
-                        <small>💡 Tip: {'La búsqueda inteligente está activa' if enable_fuzzy else 'Activa búsqueda inteligente en el menú'}</small>
-                    </div>
-                    """, unsafe_allow_html=True)
-                    
-                    if st.button("🔄 Nueva búsqueda", key="new_search"):
-                        st.session_state.last_search_query = ""
-                        st.session_state.search_results = None
-                        st.rerun()
-            
-            st.divider()
-            st.markdown("### 📄 Texto Completo")
-            
-            # Mostrar si hay corrección aplicada
-            if st.session_state.correction_applied:
-                st.info("✅ Mostrando versión con corrección ortográfica")
-            else:
-                st.info("📝 Mostrando transcripción original sin corrección")
-            
-            st.text_area(
-                "Transcripción", 
-                value=st.session_state.transcript_text, 
-                height=400,
-                label_visibility="collapsed"
-            )
-
-        # TAB 2: COMPARAR VERSIONES
-        with tab_compare:
-            st.markdown("### 🔄 Comparar Transcripciones")
-            st.caption("Compara la transcripción original vs. la versión corregida")
-            
-            if st.session_state.raw_transcript and st.session_state.correction_applied:
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    st.markdown("#### 📝 Original (Whisper)")
-                    st.text_area(
-                        "Original",
-                        value=st.session_state.raw_transcript,
-                        height=500,
-                        label_visibility="collapsed",
-                        key="original_text"
-                    )
-                    
-                    words_original = len(st.session_state.raw_transcript.split())
-                    st.metric("Palabras", words_original)
-                
-                with col2:
-                    st.markdown("#### ✏️ Corregida (Llama)")
-                    st.text_area(
-                        "Corregida",
-                        value=st.session_state.transcript_text,
-                        height=500,
-                        label_visibility="collapsed",
-                        key="corrected_text"
-                    )
-                    
-                    words_corrected = len(st.session_state.transcript_text.split())
-                    st.metric("Palabras", words_corrected)
-                
-                # Análisis de diferencias
-                st.divider()
-                st.markdown("#### 📊 Análisis de Cambios")
-                
-                if words_original == words_corrected:
-                    st.success(f"✅ Número de palabras conservado: {words_original}")
-                else:
-                    diff = words_corrected - words_original
-                    if abs(diff) <= 5:
-                        st.warning(f"⚠️ Diferencia mínima: {diff:+d} palabras (aceptable)")
-                    else:
-                        st.error(f"❌ Diferencia significativa: {diff:+d} palabras (revisar)")
-                
-                # Mostrar algunas diferencias
-                from difflib import unified_diff
-                
-                original_lines = st.session_state.raw_transcript.split('. ')[:10]
-                corrected_lines = st.session_state.transcript_text.split('. ')[:10]
-                
-                with st.expander("🔍 Ver primeras diferencias (primeras 10 oraciones)"):
-                    for i, (orig, corr) in enumerate(zip(original_lines, corrected_lines), 1):
-                        if orig.strip() != corr.strip():
-                            st.markdown(f"**Oración {i}:**")
-                            st.markdown(f"- ❌ Original: `{orig}`")
-                            st.markdown(f"- ✅ Corregida: `{corr}`")
-                            st.divider()
-            
-            elif not st.session_state.correction_applied:
-                st.info("ℹ️ No se aplicó corrección ortográfica. Actívala en la configuración para ver comparaciones.")
-            else:
-                st.warning("⚠️ No hay transcripción original disponible para comparar.")
-
-        # TAB 3: CHAT IA
-        with tab_chat:
-            st.markdown("### 💬 Asistente IA")
-            st.caption("Haz preguntas inteligentes sobre el contenido transcrito")
-            
-            # Selector de versión para el chat
-            if st.session_state.correction_applied:
-                col1, col2 = st.columns([3, 1])
-                with col1:
-                    chat_version = st.radio(
-                        "Usar versión:",
-                        options=["Corregida", "Original"],
-                        horizontal=True,
-                        help="Selecciona qué versión usar para las respuestas del chat"
-                    )
-                with col2:
-                    if st.button("🗑️ Limpiar chat"):
-                        st.session_state.chat_history = []
-                        st.rerun()
-            else:
-                chat_version = "Original"
-            
-            # Mostrar historial
-            for m in st.session_state.chat_history:
-                with st.chat_message(m["role"]): 
-                    st.markdown(m["content"])
-            
-            # Input de chat
-            if p := st.chat_input("💭 Haz una pregunta sobre la transcripción..."):
-                st.session_state.chat_history.append({"role": "user", "content": p})
-                with st.chat_message("user"): 
-                    st.markdown(p)
-                
-                # Seleccionar contexto según versión elegida
-                if chat_version == "Original" and st.session_state.raw_transcript:
-                    chat_context = st.session_state.raw_transcript
-                else:
-                    chat_context = st.session_state.transcript_text
-
-                with st.chat_message("assistant"):
-                    holder = st.empty()
-                    full = ""
-                    try:
-                        stream = client.chat.completions.create(
-                            model="llama-3.3-70b-versatile",
-                            messages=[
-                                {"role": "system", "content": f"""Eres un asistente experto en análisis de transcripciones de audio.
-
-CONTEXTO DE LA TRANSCRIPCIÓN:
-{chat_context[:15000]}
-
-INSTRUCCIONES:
-- Responde basándote ÚNICAMENTE en el contenido de la transcripción
-- Si la información no está en la transcripción, dilo claramente
-- Cita fragmentos específicos cuando sea relevante (usa comillas)
-- Sé preciso y conciso
-- Usa formato markdown para claridad (negritas, listas, etc.)
-- Si detectas términos técnicos o nombres propios, respétalos exactamente
-
-IMPORTANTE: Esta transcripción puede contener muletillas o repeticiones naturales del habla."""},
-                                {"role": "user", "content": p}
-                            ], 
-                            stream=True,
-                            temperature=0.3,
-                            max_tokens=2000
-                        )
-                        for chunk in stream:
-                            if chunk.choices[0].delta.content:
-                                full += chunk.choices[0].delta.content
-                                holder.markdown(full + "▌")
-                        holder.markdown(full)
-                        st.session_state.chat_history.append({"role": "assistant", "content": full})
-                    except Exception as e: 
-                        st.error(f"❌ Error en chat: {e}")
-
-        # TAB 4: EXPORTACIÓN
-        with tab_export:
-            st.markdown("### 📥 Exportar Transcripción")
-            
-            # Selector de versión
-            if st.session_state.correction_applied:
-                export_version = st.radio(
-                    "Versión a exportar:",
-                    options=["Corregida (recomendado)", "Original"],
-                    horizontal=True
-                )
-                
-                if export_version == "Original":
-                    text_to_export = st.session_state.raw_transcript
-                    st.info("📝 Exportando versión original de Whisper")
-                else:
-                    text_to_export = st.session_state.transcript_text
-                    st.info("✅ Exportando versión con corrección ortográfica")
-            else:
-                text_to_export = st.session_state.transcript_text
-            
-            st.divider()
-            
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.markdown("#### 📄 Formato Simple")
-                st.download_button(
-                    "📝 Texto plano (.txt)", 
-                    text_to_export, 
-                    "transcripcion.txt",
-                    use_container_width=True
-                )
-                st.download_button(
-                    "📘 Markdown (.md)", 
-                    text_to_export, 
-                    "transcripcion.md",
-                    mime="text/markdown",
-                    use_container_width=True
-                )
-            
-            with col2:
-                st.markdown("#### ⏱️ Con Timestamps")
-                timestamped = export_with_timestamps(st.session_state.transcript_segments)
-                st.download_button(
-                    "🕐 Texto con marcas (.txt)", 
-                    timestamped, 
-                    "transcripcion_timestamps.txt",
-                    use_container_width=True
-                )
-                
-                srt_content = export_srt_format(st.session_state.transcript_segments)
-                st.download_button(
-                    "🎬 Subtítulos SRT (.srt)", 
-                    srt_content, 
-                    "subtitulos.srt",
-                    use_container_width=True,
-                    help="Compatible con editores de video"
-                )
-            
-            st.divider()
-            
-            # JSON export con metadata
-            st.markdown("#### 🔧 Exportación Avanzada")
-            
-            json_data = {
-                "metadata": {
-                    "model": model_choice,
-                    "correction_applied": st.session_state.correction_applied,
-                    "total_segments": len(st.session_state.transcript_segments),
-                    "duration": st.session_state.transcript_segments[-1]['end'] if st.session_state.transcript_segments else 0
-                },
-                "transcript": text_to_export,
-                "segments": st.session_state.transcript_segments
-            }
-            
-            st.download_button(
-                "📊 JSON completo (con segmentos)",
-                json.dumps(json_data, ensure_ascii=False, indent=2),
-                "transcripcion_completa.json",
-                mime="application/json",
-                use_container_width=True,
-                help="Incluye metadata y segmentos con timestamps"
-            )
-            
-            st.divider()
-            st.markdown("#### 👁️ Vista Previa con Timestamps")
-            preview_text = timestamped[:2000] + "..." if len(timestamped) > 2000 else timestamped
-            st.code(preview_text, language="text")
-
-if __name__ == "__main__":
-    if check_password(): 
-        main_app()
+                            status.update
