@@ -263,7 +263,7 @@ def transcribe_audio_precision(client, file_path, model_name, enable_timestamps=
     Transcripción optimizada para MÁXIMA PRECISIÓN
     - Sin conversión de audio
     - Temperatura 0 para máxima determinismo
-    - Prompt optimizado para español
+    - Sin prompt para evitar contaminación
     - Respuesta verbosa con segmentos
     """
     try:
@@ -276,13 +276,13 @@ def transcribe_audio_precision(client, file_path, model_name, enable_timestamps=
         with st.spinner(f"🎧 Transcribiendo con {model_name}..."):
             with open(file_path, "rb") as file:
                 # Parámetros optimizados para máxima precisión
+                # SIN PROMPT para evitar que se filtre en la transcripción
                 params = {
                     "file": (os.path.basename(file_path), file.read()),
                     "model": model_name,
                     "response_format": "verbose_json",
                     "language": "es",
-                    "temperature": 0.0,  # Máxima determinismo
-                    "prompt": "Transcripción precisa en español. Mantén TODAS las palabras exactamente como se dicen, incluyendo muletillas, repeticiones y pausas naturales."
+                    "temperature": 0.0  # Máxima determinismo
                 }
                 
                 transcription = client.audio.transcriptions.create(**params)
