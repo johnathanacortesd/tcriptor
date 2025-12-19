@@ -2,11 +2,11 @@ import streamlit as st
 import os
 import tempfile
 import unicodedata
-import re  # <--- NUEVO IMPORT NECESARIO PARA LA MEJORA
 from groq import Groq
 from difflib import SequenceMatcher
 import hashlib
 import json
+import re
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(
@@ -124,6 +124,57 @@ def get_file_hash(file_bytes):
     """Genera hash único para el archivo"""
     return hashlib.md5(file_bytes).hexdigest()
 
+def highlight_match_in_text(text, query):
+    """
+    Resalta la consulta dentro del texto usando HTML
+    Maneja búsquedas exactas e inexactas
+    """
+    if not query or not text:
+        return text
+    
+    # Normalizar para búsqueda
+    text_normalized = normalize_text(text)
+    query_normalized = normalize_text(query)
+    
+    # Intentar encontrar coincidencia exacta primero
+    if query_normalized in text_normalized:
+        # Encontrar la posición en el texto normalizado
+        start_pos = text_normalized.find(query_normalized)
+        end_pos = start_pos + len(query_normalized)
+        
+        # Extraer la parte original del texto (con mayúsculas/tildes)
+        before = text[:start_pos]
+        match = text[start_pos:end_pos]
+        after = text[end_pos:]
+        
+        return f"{before}<span class='highlight'>{match}</span>{after}"
+    
+    # Si no hay coincidencia exacta, buscar palabras individuales
+    query_words = query_normalized.split()
+    result_text = text
+    
+    for word in query_words:
+        if len(word) > 2:  # Solo palabras de 3+ caracteres
+            # Buscar la palabra en el texto original
+            pattern = re.compile(re.escape(word), re.IGNORECASE)
+            matches = list(pattern.finditer(normalize_text(result_text)))
+            
+            if matches:
+                # Tomar la primera coincidencia
+                match = matches[0]
+                start = match.start()
+                end = match.end()
+                
+                # Extraer del texto original
+                before = result_text[:start]
+                matched_word = result_text[start:end]
+                after = result_text[end:]
+                
+                result_text = f"{before}<span class='highlight'>{matched_word}</span>{after}"
+                break  # Solo resaltar la primera palabra encontrada
+    
+    return result_text
+
 # --- SEGURIDAD ---
 def check_password():
     """Sistema de autenticación con soporte para tecla Enter"""
@@ -210,6 +261,10 @@ def save_audio_file(uploaded_file):
 def transcribe_audio_precision(client, file_path, model_name, enable_timestamps=True):
     """
     Transcripción optimizada para MÁXIMA PRECISIÓN
+    - Sin conversión de audio
+    - Temperatura 0 para máxima determinismo
+    - Prompt optimizado para español
+    - Respuesta verbosa con segmentos
     """
     try:
         size_mb = os.path.getsize(file_path) / (1024 * 1024)
@@ -220,12 +275,13 @@ def transcribe_audio_precision(client, file_path, model_name, enable_timestamps=
 
         with st.spinner(f"🎧 Transcribiendo con {model_name}..."):
             with open(file_path, "rb") as file:
+                # Parámetros optimizados para máxima precisión
                 params = {
                     "file": (os.path.basename(file_path), file.read()),
                     "model": model_name,
                     "response_format": "verbose_json",
                     "language": "es",
-                    "temperature": 0.0,
+                    "temperature": 0.0,  # Máxima determinismo
                     "prompt": "Transcripción precisa en español. Mantén TODAS las palabras exactamente como se dicen, incluyendo muletillas, repeticiones y pausas naturales."
                 }
                 
@@ -242,11 +298,19 @@ def transcribe_audio_precision(client, file_path, model_name, enable_timestamps=
 # --- CORRECCIÓN ORTOGRÁFICA CONSERVADORA ---
 def correct_orthography_only(client, raw_text, segments, max_chunk_size=6000):
     """
-    Corrección ULTRA CONSERVADORA
+    Corrección ULTRA CONSERVADORA:
+    - Solo corrige ortografía, tildes, puntuación
+    - NO modifica ni elimina palabras
+    - NO cambia el orden
+    - Mantiene muletillas y repeticiones
+    - Devuelve tanto el texto completo como los segmentos corregidos
     """
+    
+    # Para textos muy largos, dividir en chunks
     if len(raw_text) > max_chunk_size:
         st.info(f"📄 Texto largo detectado. Procesando en segmentos para mantener precisión...")
         
+        # Dividir por párrafos o puntos
         chunks = []
         current_chunk = ""
         
@@ -273,9 +337,11 @@ def correct_orthography_only(client, raw_text, segments, max_chunk_size=6000):
     else:
         corrected_text = _correct_single_chunk(client, raw_text)
     
+    # Crear segmentos corregidos manteniendo los timestamps
     corrected_segments = []
     corrected_sentences = corrected_text.replace('. ', '.|').replace('? ', '?|').replace('! ', '!|').split('|')
     
+    # Mapear oraciones corregidas a los segmentos originales
     for i, seg in enumerate(segments):
         if i < len(corrected_sentences):
             corrected_segments.append({
@@ -284,31 +350,43 @@ def correct_orthography_only(client, raw_text, segments, max_chunk_size=6000):
                 'text': corrected_sentences[i].strip()
             })
         else:
+            # Si no hay correspondencia, usar el original
             corrected_segments.append(seg)
     
+    # Si hay más oraciones corregidas que segmentos, fusionar
     if len(corrected_sentences) > len(segments):
+        # Tomar solo las primeras N que coinciden con los segmentos
         corrected_segments = corrected_segments[:len(segments)]
     
     return corrected_text, corrected_segments
 
 def _correct_single_chunk(client, text_chunk):
+    """Corrige un chunk individual de texto"""
+    
     system_prompt = """Eres un corrector ortográfico ULTRA CONSERVADOR en español.
 
 REGLAS ESTRICTAS:
 1. MANTÉN TODAS LAS PALABRAS EXACTAMENTE COMO ESTÁN
 2. Solo corrige:
-   - Tildes según RAE
-   - Puntuación básica
-   - Mayúsculas
-   - Errores evidentes
+   - Tildes según RAE (café, están, había)
+   - Puntuación básica (. , ; :)
+   - Mayúsculas al inicio de oraciones
+   - Errores ortográficos evidentes (aver → a ver)
 
 3. NUNCA:
    - Elimines palabras
    - Cambies el orden
    - Reemplaces términos
+   - Quites muletillas (eh, mm, este)
    - Modifiques nombres propios
+   - Agregues ni quites contenido
 
-4. Devuelve ÚNICAMENTE el texto corregido sin comentarios"""
+4. Devuelve ÚNICAMENTE el texto corregido sin comentarios
+
+EJEMPLO:
+Entrada: "entonces eh nosotros fuimos a ver la pelicula y estuvo muy buena"
+Salida: "Entonces eh nosotros fuimos a ver la película y estuvo muy buena"
+"""
 
     try:
         completion = client.chat.completions.create(
@@ -317,13 +395,21 @@ REGLAS ESTRICTAS:
                 {"role": "system", "content": system_prompt}, 
                 {"role": "user", "content": f"Corrige SOLO ortografía y tildes:\n\n{text_chunk}"}
             ],
-            temperature=0.0,
+            temperature=0.0,  # Máxima determinismo
             max_tokens=8000
         )
         
         result = completion.choices[0].message.content.strip()
         
-        prefixes_to_remove = ["Aquí está el texto corregido:", "Texto corregido:", "Corrección:"]
+        # Limpiar respuestas con prefijos innecesarios
+        prefixes_to_remove = [
+            "Aquí está el texto corregido:",
+            "Texto corregido:",
+            "Corrección:",
+            "He aquí la corrección:",
+            "Aquí tienes:"
+        ]
+        
         for prefix in prefixes_to_remove:
             if result.startswith(prefix):
                 result = result[len(prefix):].strip()
@@ -334,11 +420,12 @@ REGLAS ESTRICTAS:
         st.warning(f"⚠️ Error en corrección: {e}. Usando texto original.")
         return text_chunk
 
-# --- BÚSQUEDA MEJORADA (SOLUCIÓN APLICADA) ---
+# --- BÚSQUEDA MEJORADA ---
 def search_in_segments(query, segments, corrected_segments, context_size=3, fuzzy_threshold=0.7):
     """
-    Búsqueda mejorada con resaltado preciso de la palabra clave dentro del segmento.
-    Divide el segmento actual en: Previo-interno + Match + Posterior-interno.
+    Búsqueda mejorada con coincidencias exactas y difusas
+    Usa segments originales para búsqueda pero muestra corrected_segments con tildes
+    MEJORADO: Ahora resalta correctamente la palabra encontrada en el contexto
     """
     results = []
     if not query or not segments: 
@@ -347,63 +434,40 @@ def search_in_segments(query, segments, corrected_segments, context_size=3, fuzz
     query_normalized = normalize_text(query)
     
     for i, seg in enumerate(segments):
-        # Determinar qué texto usar (corregido o original)
-        current_text = corrected_segments[i]['text'] if corrected_segments and i < len(corrected_segments) else seg['text']
-        text_normalized = normalize_text(current_text)
+        text_normalized = normalize_text(seg['text'])
         
         is_exact_match = query_normalized in text_normalized
         fuzzy_score = fuzzy_search_score(query_normalized, text_normalized)
         is_fuzzy_match = fuzzy_score >= fuzzy_threshold
         
         if is_exact_match or is_fuzzy_match:
-            # 1. Contexto de segmentos vecinos (externos)
+            # Obtener contexto de los segmentos corregidos
             s_idx = max(0, i - context_size)
-            prev_segs = " ".join([corrected_segments[j]['text'] if corrected_segments and j < len(corrected_segments) else segments[j]['text'] 
-                            for j in range(s_idx, i)])
+            prev_segments = [corrected_segments[j]['text'] if j < len(corrected_segments) else segments[j]['text'] 
+                            for j in range(s_idx, i)]
+            prev_text = " ".join(prev_segments)
             
             e_idx = min(len(segments), i + context_size + 1)
-            next_segs = " ".join([corrected_segments[j]['text'] if corrected_segments and j < len(corrected_segments) else segments[j]['text']
-                           for j in range(i+1, e_idx)])
+            next_segments = [corrected_segments[j]['text'] if j < len(corrected_segments) else segments[j]['text']
+                            for j in range(i+1, e_idx)]
+            next_text = " ".join(next_segments)
             
-            # 2. Dividir el segmento actual para resaltar SOLO la palabra (interno)
-            match_display = current_text
-            pre_inner = ""
-            post_inner = ""
-
-            # Intentamos usar Regex para encontrar la ubicación exacta respetando mayúsculas del texto original
-            try:
-                if is_exact_match:
-                    # Creamos pattern ignorando case
-                    pattern = re.compile(re.escape(query), re.IGNORECASE)
-                    match_obj = pattern.search(current_text)
-                    
-                    if match_obj:
-                        start, end = match_obj.span()
-                        pre_inner = current_text[:start]
-                        match_display = current_text[start:end]
-                        post_inner = current_text[end:]
-                    # Si no encuentra por regex (ej. tema de tildes complejas), mantiene el segmento completo como fallback
-                
-                # En búsqueda difusa (fuzzy), cortar es riesgoso, mantenemos el segmento completo resaltado
-            except Exception:
-                pass # Fallback: match_display sigue siendo todo el segmento
-
-            # 3. Construir cadenas finales para la UI
-            # Prev = Segmentos Anteriores + Inicio del Segmento Actual
-            final_prev = (f"...{prev_segs} " if prev_segs else "") + pre_inner
+            # Usar el segmento corregido para el texto principal
+            match_text = corrected_segments[i]['text'] if i < len(corrected_segments) else seg['text']
             
-            # Next = Fin del Segmento Actual + Segmentos Siguientes
-            final_next = post_inner + (f" {next_segs}..." if next_segs else "")
-
+            # CLAVE: Resaltar la consulta en el texto del match
+            match_text_highlighted = highlight_match_in_text(match_text, query)
+            
             match_type = "exact" if is_exact_match else "fuzzy"
             confidence = "high" if is_exact_match else ("medium" if fuzzy_score >= 0.85 else "low")
             
             results.append({
                 "start": seg['start'], 
                 "formatted": format_timestamp(seg['start']),
-                "match": match_display, # Ahora contiene solo la palabra (si fue exacto)
-                "prev": final_prev, 
-                "next": final_next,
+                "match": match_text_highlighted,  # Texto con resaltado HTML
+                "match_plain": match_text,  # Texto sin resaltado (para otros usos)
+                "prev": prev_text, 
+                "next": next_text,
                 "segment_index": i,
                 "match_type": match_type,
                 "confidence": confidence,
@@ -415,6 +479,7 @@ def search_in_segments(query, segments, corrected_segments, context_size=3, fuzz
 
 # --- EXPORTACIÓN ---
 def export_with_timestamps(segments):
+    """Exporta transcripción con timestamps"""
     output = []
     for seg in segments:
         timestamp = format_timestamp(seg['start'])
@@ -422,6 +487,7 @@ def export_with_timestamps(segments):
     return "\n".join(output)
 
 def export_srt_format(segments):
+    """Exporta en formato SRT (subtítulos)"""
     output = []
     for i, seg in enumerate(segments, 1):
         start_time = format_srt_timestamp(seg['start'])
@@ -430,6 +496,7 @@ def export_srt_format(segments):
     return "\n".join(output)
 
 def format_srt_timestamp(seconds):
+    """Formato timestamp para SRT"""
     hours = int(seconds // 3600)
     minutes = int((seconds % 3600) // 60)
     secs = int(seconds % 60)
@@ -551,6 +618,7 @@ def main_app():
         - ✅ **Temperatura 0**: Máxima determinismo en la transcripción
         - ✅ **Modelo V3**: Mejor precisión disponible
         - ✅ **Corrección conservadora**: Solo tildes y puntuación, NO modifica palabras
+        - ✅ **Búsqueda mejorada**: Resalta exactamente la palabra encontrada
         
         **Límites de Groq API:**
         - Tamaño máximo: 25MB
@@ -697,9 +765,9 @@ def main_app():
                                     f"""<div class='search-result'>
                                         <span class='confidence-badge {confidence_class}'>{confidence_text}</span>
                                         <br><br>
-                                        <span class='context-text'>{r['prev']}</span> 
-                                        <span class='highlight'>{r['match']}</span> 
-                                        <span class='context-text'>{r['next']}</span>
+                                        <span class='context-text'>...{r['prev']}</span> 
+                                        {r['match']} 
+                                        <span class='context-text'>{r['next']}...</span>
                                     </div>""", 
                                     unsafe_allow_html=True
                                 )
