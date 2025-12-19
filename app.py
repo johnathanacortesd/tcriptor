@@ -89,6 +89,7 @@ st.markdown("""
 if "authenticated" not in st.session_state: st.session_state.authenticated = False
 if "transcript_text" not in st.session_state: st.session_state.transcript_text = None
 if "transcript_segments" not in st.session_state: st.session_state.transcript_segments = None
+if "corrected_segments" not in st.session_state: st.session_state.corrected_segments = None
 if "raw_transcript" not in st.session_state: st.session_state.raw_transcript = None
 if "audio_path" not in st.session_state: st.session_state.audio_path = None
 if "audio_start_time" not in st.session_state: st.session_state.audio_start_time = 0
@@ -243,13 +244,14 @@ def transcribe_audio_precision(client, file_path, model_name, enable_timestamps=
         return None, None
 
 # --- CORRECCIÓN ORTOGRÁFICA CONSERVADORA ---
-def correct_orthography_only(client, raw_text, max_chunk_size=6000):
+def correct_orthography_only(client, raw_text, segments, max_chunk_size=6000):
     """
     Corrección ULTRA CONSERVADORA:
     - Solo corrige ortografía, tildes, puntuación
     - NO modifica ni elimina palabras
     - NO cambia el orden
     - Mantiene muletillas y repeticiones
+    - Devuelve tanto el texto completo como los segmentos corregidos
     """
     
     # Para textos muy largos, dividir en chunks
@@ -279,10 +281,32 @@ def correct_orthography_only(client, raw_text, max_chunk_size=6000):
             progress_bar.progress((i + 1) / len(chunks))
         
         progress_bar.empty()
-        return " ".join(corrected_chunks)
-    
+        corrected_text = " ".join(corrected_chunks)
     else:
-        return _correct_single_chunk(client, raw_text)
+        corrected_text = _correct_single_chunk(client, raw_text)
+    
+    # Crear segmentos corregidos manteniendo los timestamps
+    corrected_segments = []
+    corrected_sentences = corrected_text.replace('. ', '.|').replace('? ', '?|').replace('! ', '!|').split('|')
+    
+    # Mapear oraciones corregidas a los segmentos originales
+    for i, seg in enumerate(segments):
+        if i < len(corrected_sentences):
+            corrected_segments.append({
+                'start': seg['start'],
+                'end': seg['end'],
+                'text': corrected_sentences[i].strip()
+            })
+        else:
+            # Si no hay correspondencia, usar el original
+            corrected_segments.append(seg)
+    
+    # Si hay más oraciones corregidas que segmentos, fusionar
+    if len(corrected_sentences) > len(segments):
+        # Tomar solo las primeras N que coinciden con los segmentos
+        corrected_segments = corrected_segments[:len(segments)]
+    
+    return corrected_text, corrected_segments
 
 def _correct_single_chunk(client, text_chunk):
     """Corrige un chunk individual de texto"""
@@ -345,8 +369,11 @@ Salida: "Entonces eh nosotros fuimos a ver la película y estuvo muy buena"
         return text_chunk
 
 # --- BÚSQUEDA MEJORADA ---
-def search_in_segments(query, segments, context_size=3, fuzzy_threshold=0.7):
-    """Búsqueda mejorada con coincidencias exactas y difusas"""
+def search_in_segments(query, segments, corrected_segments, context_size=3, fuzzy_threshold=0.7):
+    """
+    Búsqueda mejorada con coincidencias exactas y difusas
+    Usa segments originales para búsqueda pero muestra corrected_segments con tildes
+    """
     results = []
     if not query or not segments: 
         return results
@@ -361,11 +388,17 @@ def search_in_segments(query, segments, context_size=3, fuzzy_threshold=0.7):
         is_fuzzy_match = fuzzy_score >= fuzzy_threshold
         
         if is_exact_match or is_fuzzy_match:
+            # Obtener contexto de los segmentos corregidos
             s_idx = max(0, i - context_size)
-            prev = " ".join([s['text'] for s in segments[s_idx:i]])
+            prev = " ".join([corrected_segments[j]['text'] if j < len(corrected_segments) else segments[j]['text'] 
+                            for j in range(s_idx, i)])
             
             e_idx = min(len(segments), i + context_size + 1)
-            nxt = " ".join([s['text'] for s in segments[i+1:e_idx]])
+            nxt = " ".join([corrected_segments[j]['text'] if j < len(corrected_segments) else segments[j]['text']
+                           for j in range(i+1, e_idx)])
+            
+            # Usar el segmento corregido para mostrar
+            match_text = corrected_segments[i]['text'] if i < len(corrected_segments) else seg['text']
             
             match_type = "exact" if is_exact_match else "fuzzy"
             confidence = "high" if is_exact_match else ("medium" if fuzzy_score >= 0.85 else "low")
@@ -373,7 +406,7 @@ def search_in_segments(query, segments, context_size=3, fuzzy_threshold=0.7):
             results.append({
                 "start": seg['start'], 
                 "formatted": format_timestamp(seg['start']),
-                "match": seg['text'], 
+                "match": match_text, 
                 "prev": prev, 
                 "next": nxt,
                 "segment_index": i,
@@ -584,10 +617,13 @@ def main_app():
                             # Aplicar corrección si está habilitada
                             if enable_correction:
                                 st.write("✨ Aplicando corrección ortográfica conservadora...")
-                                st.session_state.transcript_text = correct_orthography_only(client, raw)
+                                corrected_text, corrected_segs = correct_orthography_only(client, raw, segs)
+                                st.session_state.transcript_text = corrected_text
+                                st.session_state.corrected_segments = corrected_segs
                                 st.session_state.correction_applied = True
                             else:
                                 st.session_state.transcript_text = raw
+                                st.session_state.corrected_segments = segs  # Usar los originales
                                 st.session_state.correction_applied = False
                             
                             st.session_state.audio_start_time = 0
@@ -634,9 +670,11 @@ def main_app():
             if submit_search:
                 if search_query:
                     st.session_state.last_search_query = search_query
+                    # Usar los segmentos corregidos para mostrar resultados con tildes
                     st.session_state.search_results = search_in_segments(
                         search_query, 
                         st.session_state.transcript_segments,
+                        st.session_state.corrected_segments,
                         st.session_state.context_sentences,
                         fuzzy_threshold if enable_fuzzy else 1.0
                     )
