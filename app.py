@@ -133,32 +133,48 @@ def highlight_text(text, query):
             
     return highlighted_text
 
-# --- SEGURIDAD ---
+# --- SEGURIDAD (CORREGIDO) ---
 def check_password():
-    if st.session_state.authenticated: return True
+    if st.session_state.authenticated: 
+        return True
     
     st.title("🔒 Acceso Restringido")
     col1, col2, col3 = st.columns([1, 2, 1])
+    
     with col2:
-        with st.form("login_form"):
-            password_input = st.text_input("Contraseña", type="password", key=f"pwd_{st.session_state.password_attempts}")
-            submit_button = st.form_submit_button("Ingresar", use_container_width=True)
+        password_input = st.text_input(
+            "Contraseña", 
+            type="password", 
+            key="password_field",
+            on_change=validate_password
+        )
+        
+        if st.button("Ingresar", use_container_width=True, type="primary"):
+            validate_password()
             
-        if submit_button:
-            try:
-                if password_input == st.secrets["general"]["app_password"]:
-                    st.session_state.authenticated = True
-                    st.success("✅ Acceso concedido")
-                    st.rerun()
-                else: 
-                    st.error("⛔ Contraseña incorrecta")
-                    st.session_state.password_attempts += 1
-            except:
-                st.error("❌ Error de configuración en secrets.toml")
     return False
 
+def validate_password():
+    """Función separada para validar contraseña"""
+    password_input = st.session_state.get("password_field", "")
+    
+    if not password_input:
+        return
+        
+    try:
+        if password_input == st.secrets["general"]["app_password"]:
+            st.session_state.authenticated = True
+            st.success("✅ Acceso concedido")
+            st.rerun()
+        else: 
+            st.error("⛔ Contraseña incorrecta")
+            st.session_state.password_attempts += 1
+    except Exception as e:
+        st.error("❌ Error de configuración en secrets.toml")
+
 def get_groq_client():
-    try: return Groq(api_key=st.secrets["general"]["groq_api_key"])
+    try: 
+        return Groq(api_key=st.secrets["general"]["groq_api_key"])
     except: 
         st.error("❌ Error: No API Key found")
         return None
@@ -177,13 +193,16 @@ def save_audio_file(uploaded_file):
         filename_normalized = unicodedata.normalize('NFKD', uploaded_file.name).encode('ascii', 'ignore').decode('ascii')
         safe_name = "".join([c for c in filename_normalized if c.isalnum() or c in ('.', '_', '-')]).strip() or "audio_temp.mp3"
         file_path = os.path.join(temp_dir, f"original_{safe_name}")
-        with open(file_path, "wb") as f: f.write(uploaded_file.getbuffer())
+        with open(file_path, "wb") as f: 
+            f.write(uploaded_file.getbuffer())
         return file_path
-    except: return None
+    except: 
+        return None
 
 def transcribe_audio_precision(client, file_path, model_name):
     try:
-        if os.path.getsize(file_path) > 25 * 1024 * 1024: return None, None
+        if os.path.getsize(file_path) > 25 * 1024 * 1024: 
+            return None, None
         with st.spinner(f"🎧 Transcribiendo con {model_name}..."):
             with open(file_path, "rb") as file:
                 transcription = client.audio.transcriptions.create(
@@ -246,7 +265,8 @@ def correct_orthography_only(client, raw_text, segments, max_chunk_size=6000):
             else:
                 chunks.append(current_chunk)
                 current_chunk = line + ". "
-        if current_chunk: chunks.append(current_chunk)
+        if current_chunk: 
+            chunks.append(current_chunk)
         
         corrected_chunks = []
         progress = st.progress(0)
@@ -269,21 +289,60 @@ def _correct_single_chunk(client, text_chunk):
     try:
         res = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
-            messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": text_chunk}],
+            messages=[
+                {"role": "system", "content": system_prompt}, 
+                {"role": "user", "content": text_chunk}
+            ],
             temperature=0.0
         )
         out = res.choices[0].message.content.strip()
-        if out.startswith(("Aquí", "Texto", "Corrección")): return out.split(":", 1)[1].strip()
+        if out.startswith(("Aquí", "Texto", "Corrección")): 
+            return out.split(":", 1)[1].strip()
         return out
-    except: return text_chunk
+    except: 
+        return text_chunk
 
-# --- BÚSQUEDA CORREGIDA ---
+# --- BÚSQUEDA MEJORADA CON MÁS CONTEXTO ---
+def get_complete_context(segments, match_index, context_size):
+    """
+    Obtiene contexto completo extendiendo hasta límites naturales de frases.
+    Mejora: no corta frases a la mitad, busca puntos finales completos.
+    """
+    start_idx = max(0, match_index - context_size)
+    end_idx = min(len(segments), match_index + context_size + 1)
+    
+    # Extender hacia atrás hasta encontrar inicio de frase (mayúscula después de punto)
+    while start_idx > 0:
+        prev_text = segments[start_idx - 1]['text'].strip()
+        # Si termina en punto/signo de puntuación fuerte, detener
+        if prev_text and prev_text[-1] in '.!?':
+            break
+        # Si ya llevamos 10 segmentos hacia atrás, detener
+        if match_index - start_idx >= context_size + 5:
+            break
+        start_idx -= 1
+    
+    # Extender hacia adelante hasta encontrar fin de frase
+    while end_idx < len(segments):
+        curr_text = segments[end_idx - 1]['text'].strip()
+        # Si termina en punto/signo de puntuación fuerte, detener
+        if curr_text and curr_text[-1] in '.!?':
+            break
+        # Si ya llevamos 10 segmentos hacia adelante, detener
+        if end_idx - match_index >= context_size + 5:
+            break
+        end_idx += 1
+    
+    return start_idx, end_idx
+
 def search_in_segments(query, segments, corrected_segments, context_size=2, fuzzy_threshold=0.7):
     """
     Búsqueda priorizando los segmentos corregidos para visualización.
+    MEJORADO: Contexto extendido hasta completar frases.
     """
     results = []
-    if not query: return results
+    if not query: 
+        return results
     
     # Usar corrected_segments si existen, sino segments originales
     target_segments = corrected_segments if corrected_segments else segments
@@ -299,10 +358,10 @@ def search_in_segments(query, segments, corrected_segments, context_size=2, fuzz
         is_fuzzy = score >= fuzzy_threshold
         
         if is_exact or is_fuzzy:
-            # Construir contexto con el texto corregido
-            start_idx = max(0, i - context_size)
-            end_idx = min(len(target_segments), i + context_size + 1)
+            # MEJORA: Obtener contexto completo sin cortar frases
+            start_idx, end_idx = get_complete_context(target_segments, i, context_size)
             
+            # Construir contexto con el texto corregido
             prev_txt = " ".join([s['text'] for s in target_segments[start_idx:i]])
             match_txt = highlight_text(text_display, query)
             next_txt = " ".join([s['text'] for s in target_segments[i+1:end_idx]])
@@ -323,7 +382,8 @@ def search_in_segments(query, segments, corrected_segments, context_size=2, fuzz
 # --- APP PRINCIPAL ---
 def main_app():
     client = get_groq_client()
-    if not client: st.stop()
+    if not client: 
+        st.stop()
 
     with st.sidebar:
         st.title("⚙️ Configuración")
@@ -331,11 +391,13 @@ def main_app():
         enable_corr = st.checkbox("Corrección Ortográfica", value=True)
         st.divider()
         st.markdown("#### 🔍 Búsqueda")
-        context_n = st.slider("Contexto", 1, 5, 2)
+        context_n = st.slider("Contexto (segmentos)", 1, 8, 3, help="Cuántos segmentos antes/después del resultado mostrar. El sistema extenderá automáticamente hasta completar frases.")
         fuzzy = st.checkbox("Búsqueda Fuzzy", value=True)
         thresh = st.slider("Sensibilidad", 0.5, 1.0, 0.75) if fuzzy else 1.0
         st.divider()
-        if st.button("🚪 Salir"): st.session_state.clear(); st.rerun()
+        if st.button("🚪 Salir"): 
+            st.session_state.clear()
+            st.rerun()
 
     st.title("🎙️ Transcriptor Pro")
     
@@ -393,7 +455,7 @@ def main_app():
                     st.rerun()
 
             if st.session_state.last_search_query and st.session_state.search_results:
-                st.success(f"Resultados: {len(st.session_state.search_results)}")
+                st.success(f"✅ Encontrados {len(st.session_state.search_results)} resultados para '{st.session_state.last_search_query}'")
                 for r in st.session_state.search_results:
                     with st.container():
                         b_col, t_col = st.columns([1, 8])
@@ -413,16 +475,18 @@ def main_app():
 
             st.divider()
             st.markdown("### 📄 Texto Completo")
-            st.text_area("", value=st.session_state.transcript_text, height=400)
+            st.text_area("", value=st.session_state.transcript_text, height=400, label_visibility="collapsed")
 
         with tab2:
             st.markdown("### 💬 Chat con tu Audio")
             for m in st.session_state.chat_history:
-                with st.chat_message(m["role"]): st.markdown(m["content"])
+                with st.chat_message(m["role"]): 
+                    st.markdown(m["content"])
             
             if prompt := st.chat_input("Pregunta algo..."):
                 st.session_state.chat_history.append({"role": "user", "content": prompt})
-                with st.chat_message("user"): st.markdown(prompt)
+                with st.chat_message("user"): 
+                    st.markdown(prompt)
                 
                 with st.chat_message("assistant"):
                     full_res = ""
@@ -433,7 +497,8 @@ def main_app():
                             messages=[
                                 {"role": "system", "content": f"Contexto:\n{st.session_state.transcript_text[:20000]}"},
                                 {"role": "user", "content": prompt}
-                            ], stream=True
+                            ], 
+                            stream=True
                         )
                         for chunk in stream:
                             if chunk.choices[0].delta.content:
@@ -441,10 +506,19 @@ def main_app():
                                 holder.markdown(full_res + "▌")
                         holder.markdown(full_res)
                         st.session_state.chat_history.append({"role": "assistant", "content": full_res})
-                    except Exception as e: st.error(str(e))
+                    except Exception as e: 
+                        st.error(str(e))
 
         with tab3:
-            st.download_button("Descargar Texto (.txt)", st.session_state.transcript_text, "transcripcion.txt")
+            st.markdown("### 📥 Exportar Transcripción")
+            st.download_button(
+                label="📄 Descargar Texto (.txt)", 
+                data=st.session_state.transcript_text, 
+                file_name="transcripcion.txt",
+                mime="text/plain",
+                use_container_width=True
+            )
 
 if __name__ == "__main__":
-    if check_password(): main_app()
+    if check_password(): 
+        main_app()
