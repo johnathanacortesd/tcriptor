@@ -14,199 +14,372 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# --- CSS COMPACTO ESTILO GOOGLE MATERIAL ---
+# --- CSS MODERNO COMPACTO ---
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap');
 
     :root {
-        --primary: #1a73e8;
-        --primary-light: #e8f0fe;
+        --primary: #4f46e5;
+        --primary-hover: #4338ca;
+        --primary-light: #eef2ff;
+        --primary-subtle: #c7d2fe;
         --surface: #ffffff;
-        --bg: #f8f9fa;
-        --text: #202124;
-        --text-secondary: #5f6368;
-        --border: #dadce0;
-        --green: #34a853;
-        --yellow: #fbbc04;
-        --red: #ea4335;
-        --radius: 8px;
-        --shadow-sm: 0 1px 2px rgba(60,64,67,0.1), 0 1px 3px rgba(60,64,67,0.08);
-        --shadow-md: 0 1px 3px rgba(60,64,67,0.15), 0 4px 8px rgba(60,64,67,0.1);
+        --bg: #f9fafb;
+        --text: #111827;
+        --text-secondary: #6b7280;
+        --text-muted: #9ca3af;
+        --border: #e5e7eb;
+        --border-hover: #d1d5db;
+        --green: #059669;
+        --green-bg: #ecfdf5;
+        --amber: #d97706;
+        --amber-bg: #fffbeb;
+        --red: #dc2626;
+        --red-bg: #fef2f2;
+        --radius: 12px;
+        --radius-sm: 8px;
+        --radius-xs: 6px;
+        --shadow-xs: 0 1px 2px rgba(0,0,0,0.05);
+        --shadow-sm: 0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.06);
+        --shadow-md: 0 4px 6px -1px rgba(0,0,0,0.08), 0 2px 4px -2px rgba(0,0,0,0.05);
+        --shadow-lg: 0 10px 15px -3px rgba(0,0,0,0.08), 0 4px 6px -4px rgba(0,0,0,0.05);
+        --transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
     }
 
-    * { font-family: 'Inter', -apple-system, sans-serif !important; }
+    * { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important; }
+    code, .mono { font-family: 'JetBrains Mono', monospace !important; }
 
+    /* Layout principal */
     .main .block-container {
-        padding: 1rem 2rem 2rem 2rem;
-        max-width: 1100px;
+        padding: 0.5rem 1.5rem 1rem 1.5rem;
+        max-width: 1200px;
     }
 
-    .app-header {
+    /* Ocultar elementos Streamlit */
+    #MainMenu, footer, header { visibility: hidden; }
+    .stDeployButton { display: none; }
+
+    /* ===== LOGIN ===== */
+    .login-container {
         display: flex;
         align-items: center;
-        gap: 12px;
-        padding: 12px 0 8px 0;
-        border-bottom: 1px solid var(--border);
-        margin-bottom: 16px;
+        justify-content: center;
+        min-height: 70vh;
     }
-    .app-header h1 {
-        font-size: 1.4rem;
-        font-weight: 600;
-        color: var(--text);
-        margin: 0;
-        letter-spacing: -0.5px;
-    }
-    .app-header .subtitle {
-        font-size: 0.8rem;
-        color: var(--text-secondary);
-        margin-left: auto;
-    }
-
-    .search-result {
+    .login-card {
         background: var(--surface);
         border: 1px solid var(--border);
-        border-radius: var(--radius);
-        padding: 12px 16px;
-        margin-bottom: 8px;
-        box-shadow: var(--shadow-sm);
-        transition: box-shadow 0.2s;
+        border-radius: 16px;
+        padding: 40px 36px;
+        max-width: 380px;
+        width: 100%;
+        box-shadow: var(--shadow-lg);
+        text-align: center;
     }
-    .search-result:hover {
-        box-shadow: var(--shadow-md);
+    .login-icon {
+        width: 56px;
+        height: 56px;
+        background: linear-gradient(135deg, var(--primary) 0%, #7c3aed 100%);
+        border-radius: 16px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 24px;
+        margin-bottom: 16px;
+    }
+    .login-title {
+        font-size: 1.25rem;
+        font-weight: 700;
+        color: var(--text);
+        margin: 0 0 4px 0;
+    }
+    .login-subtitle {
+        font-size: 0.85rem;
+        color: var(--text-secondary);
+        margin: 0 0 24px 0;
     }
 
-    .result-header {
+    /* ===== HEADER ===== */
+    .app-bar {
         display: flex;
         align-items: center;
-        gap: 8px;
-        margin-bottom: 6px;
+        justify-content: space-between;
+        padding: 8px 0;
+        margin-bottom: 8px;
     }
-
-    .timestamp-chip {
+    .app-bar-left {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+    .app-logo {
+        width: 36px;
+        height: 36px;
+        background: linear-gradient(135deg, var(--primary) 0%, #7c3aed 100%);
+        border-radius: 10px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 18px;
+        color: white;
+        flex-shrink: 0;
+    }
+    .app-name {
+        font-size: 1.1rem;
+        font-weight: 700;
+        color: var(--text);
+        letter-spacing: -0.3px;
+    }
+    .app-tag {
+        font-size: 0.65rem;
         background: var(--primary-light);
         color: var(--primary);
         padding: 2px 8px;
-        border-radius: 12px;
-        font-size: 0.75rem;
+        border-radius: 20px;
         font-weight: 600;
-        white-space: nowrap;
+        letter-spacing: 0.3px;
     }
 
-    .badge {
-        padding: 2px 6px;
-        border-radius: 4px;
-        font-size: 0.65rem;
+    /* ===== CARDS ===== */
+    .card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 16px;
+        box-shadow: var(--shadow-xs);
+    }
+    .card-compact {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        padding: 12px;
+        box-shadow: var(--shadow-xs);
+    }
+
+    /* ===== STATS CHIPS ===== */
+    .stats-bar {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin: 6px 0 10px 0;
+    }
+    .stat-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 0.72rem;
+        color: var(--text-secondary);
+        background: var(--bg);
+        padding: 4px 10px;
+        border-radius: 20px;
+        border: 1px solid var(--border);
+        font-weight: 500;
+    }
+    .stat-chip strong {
+        color: var(--text);
         font-weight: 600;
+    }
+    .stat-chip-ok {
+        background: var(--green-bg);
+        color: var(--green);
+        border-color: #a7f3d0;
+    }
+
+    /* ===== RESULTADOS DE BÚSQUEDA ===== */
+    .sr-card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        padding: 10px 14px;
+        margin-bottom: 6px;
+        box-shadow: var(--shadow-xs);
+        transition: var(--transition);
+        cursor: default;
+    }
+    .sr-card:hover {
+        border-color: var(--primary-subtle);
+        box-shadow: var(--shadow-sm);
+    }
+    .sr-head {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin-bottom: 5px;
+    }
+    .sr-time {
+        font-family: 'JetBrains Mono', monospace !important;
+        font-size: 0.7rem;
+        font-weight: 500;
+        color: var(--primary);
+        background: var(--primary-light);
+        padding: 2px 8px;
+        border-radius: 4px;
+    }
+    .sr-badge {
+        font-size: 0.6rem;
+        font-weight: 700;
+        padding: 1px 6px;
+        border-radius: 4px;
         text-transform: uppercase;
         letter-spacing: 0.5px;
     }
-    .badge-high { background: #e6f4ea; color: var(--green); }
-    .badge-medium { background: #fef7e0; color: #e37400; }
-    .badge-low { background: #fce8e6; color: var(--red); }
+    .sr-badge-high { background: var(--green-bg); color: var(--green); }
+    .sr-badge-medium { background: var(--amber-bg); color: var(--amber); }
+    .sr-badge-low { background: var(--red-bg); color: var(--red); }
 
+    .sr-body {
+        font-size: 0.82rem;
+        line-height: 1.6;
+        color: var(--text);
+    }
+    .sr-ctx {
+        color: var(--text-muted);
+    }
     .hl {
-        background: #fbbc04;
-        color: #202124;
-        padding: 1px 3px;
+        background: linear-gradient(120deg, #fde68a 0%, #fbbf24 100%);
+        color: var(--text);
+        padding: 1px 4px;
         border-radius: 3px;
         font-weight: 600;
         box-decoration-break: clone;
         -webkit-box-decoration-break: clone;
     }
 
-    .result-text {
-        font-size: 0.9rem;
-        line-height: 1.65;
-        color: var(--text);
-    }
-    .ctx {
-        color: var(--text-secondary);
-        font-weight: 300;
-    }
-
-    .full-text-container {
+    /* ===== TEXTO COMPLETO ===== */
+    .full-text-box {
         background: var(--surface);
         border: 1px solid var(--border);
-        border-radius: var(--radius);
-        padding: 20px;
-        font-size: 0.9rem;
-        line-height: 1.8;
+        border-radius: var(--radius-sm);
+        padding: 16px 20px;
+        font-size: 0.85rem;
+        line-height: 1.85;
         color: var(--text);
-        max-height: 500px;
+        max-height: 380px;
         overflow-y: auto;
     }
+    .full-text-box::-webkit-scrollbar { width: 5px; }
+    .full-text-box::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+    .full-text-box::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 
-    .no-results {
+    /* ===== EMPTY STATE ===== */
+    .empty-state {
         text-align: center;
-        padding: 24px;
-        color: var(--text-secondary);
+        padding: 40px 20px;
+        color: var(--text-muted);
     }
-
-    .stats-row {
-        display: flex;
-        gap: 16px;
-        margin: 8px 0;
+    .empty-state-icon {
+        font-size: 2.5rem;
+        margin-bottom: 8px;
+        opacity: 0.6;
     }
-    .stat-item {
-        font-size: 0.8rem;
-        color: var(--text-secondary);
-    }
-    .stat-item strong {
-        color: var(--text);
-    }
-
-    .login-box {
-        max-width: 360px;
-        margin: 80px auto;
-        text-align: center;
-    }
-    .login-box h2 {
-        font-size: 1.3rem;
+    .empty-state-title {
+        font-size: 0.95rem;
         font-weight: 600;
+        color: var(--text-secondary);
         margin-bottom: 4px;
     }
-    .login-box p {
-        color: var(--text-secondary);
-        font-size: 0.85rem;
-        margin-bottom: 20px;
+    .empty-state-text {
+        font-size: 0.8rem;
+        color: var(--text-muted);
     }
 
+    /* ===== NO RESULTS ===== */
+    .no-results-box {
+        text-align: center;
+        padding: 20px;
+        color: var(--text-secondary);
+        background: var(--bg);
+        border-radius: var(--radius-sm);
+        border: 1px dashed var(--border);
+    }
+
+    /* ===== TABS ===== */
     .stTabs [data-baseweb="tab-list"] {
         gap: 0;
-        border-bottom: 2px solid var(--border);
+        background: var(--bg);
+        border-radius: var(--radius-sm);
+        padding: 3px;
+        border: 1px solid var(--border);
     }
     .stTabs [data-baseweb="tab"] {
-        font-size: 0.85rem;
+        font-size: 0.8rem;
         font-weight: 500;
-        padding: 8px 16px;
+        padding: 6px 16px;
         color: var(--text-secondary);
+        border-radius: var(--radius-xs);
+        border-bottom: none !important;
+        background: transparent;
     }
     .stTabs [aria-selected="true"] {
         color: var(--primary) !important;
-        border-bottom-color: var(--primary) !important;
+        background: var(--surface) !important;
+        box-shadow: var(--shadow-xs) !important;
+        border-bottom: none !important;
+    }
+    .stTabs [data-baseweb="tab-panel"] {
+        padding-top: 10px;
+    }
+    .stTabs [data-baseweb="tab-highlight"] {
+        display: none;
+    }
+    .stTabs [data-baseweb="tab-border"] {
+        display: none;
     }
 
-    div[data-testid="stSidebar"] {
+    /* ===== SIDEBAR ===== */
+    section[data-testid="stSidebar"] {
         background: var(--surface);
         border-right: 1px solid var(--border);
     }
-
-    .stButton > button[kind="primary"] {
-        background: var(--primary);
-        border: none;
-        border-radius: var(--radius);
-        font-weight: 500;
+    section[data-testid="stSidebar"] .block-container {
+        padding-top: 1rem;
     }
 
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    header {visibility: hidden;}
+    /* ===== BOTONES ===== */
+    .stButton > button {
+        border-radius: var(--radius-xs) !important;
+        font-weight: 500 !important;
+        font-size: 0.82rem !important;
+        transition: var(--transition) !important;
+    }
+    .stButton > button[kind="primary"] {
+        background: var(--primary) !important;
+        border: none !important;
+    }
+    .stButton > button[kind="primary"]:hover {
+        background: var(--primary-hover) !important;
+    }
 
-    .full-text-container::-webkit-scrollbar { width: 6px; }
-    .full-text-container::-webkit-scrollbar-thumb {
-        background: var(--border);
-        border-radius: 3px;
+    /* ===== INPUTS ===== */
+    .stTextInput > div > div > input {
+        border-radius: var(--radius-xs) !important;
+        border-color: var(--border) !important;
+        font-size: 0.85rem !important;
+    }
+    .stTextInput > div > div > input:focus {
+        border-color: var(--primary) !important;
+        box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1) !important;
+    }
+
+    /* ===== AUDIO PLAYER ===== */
+    .stAudio { margin: 4px 0 8px 0; }
+
+    /* ===== FILE UPLOADER ===== */
+    .stFileUploader > div {
+        border-radius: var(--radius-sm) !important;
+    }
+
+    /* ===== CHAT ===== */
+    .stChatMessage {
+        font-size: 0.88rem;
+    }
+
+    /* ===== DIVIDER ===== */
+    hr {
+        border-color: var(--border) !important;
+        margin: 8px 0 !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -260,31 +433,53 @@ def highlight_html(text, query):
     return result
 
 
-# --- AUTH ---
+# --- AUTH (ENTER FUNCIONA) ---
 def check_password():
     if st.session_state.authenticated:
         return True
 
-    st.markdown("""
-    <div class="login-box">
-        <h2>🎙️ Transcriptor Pro</h2>
-        <p>Ingresa la contraseña para continuar</p>
-    </div>
-    """, unsafe_allow_html=True)
+    def do_login():
+        pwd = st.session_state.get("_pwd_input", "")
+        if not pwd:
+            return
+        try:
+            if pwd == st.secrets["general"]["app_password"]:
+                st.session_state.authenticated = True
+            else:
+                st.session_state._login_error = "Contraseña incorrecta"
+        except Exception:
+            st.session_state._login_error = "Error de configuración"
 
-    col1, col2, col3 = st.columns([1, 1.2, 1])
+    st.markdown("<div style='height:15vh'></div>", unsafe_allow_html=True)
+
+    col1, col2, col3 = st.columns([1.2, 1, 1.2])
     with col2:
-        pwd = st.text_input("Contraseña", type="password", label_visibility="collapsed",
-                            placeholder="Contraseña...")
-        if st.button("Ingresar", use_container_width=True, type="primary"):
-            try:
-                if pwd == st.secrets["general"]["app_password"]:
-                    st.session_state.authenticated = True
-                    st.rerun()
-                else:
-                    st.error("Contraseña incorrecta")
-            except Exception:
-                st.error("Error de configuración (secrets.toml)")
+        st.markdown("""
+        <div style="text-align:center">
+            <div class="login-icon">🎙️</div>
+            <p class="login-title">Transcriptor Pro</p>
+            <p class="login-subtitle">Ingresa tu contraseña para continuar</p>
+        </div>
+        """, unsafe_allow_html=True)
+
+        st.text_input(
+            "Contraseña",
+            type="password",
+            label_visibility="collapsed",
+            placeholder="Contraseña...",
+            key="_pwd_input",
+            on_change=do_login
+        )
+
+        st.button("Ingresar", use_container_width=True, type="primary", on_click=do_login)
+
+        if st.session_state.get("_login_error"):
+            st.error(st.session_state._login_error)
+            st.session_state._login_error = None
+
+    if st.session_state.authenticated:
+        st.rerun()
+
     return False
 
 
@@ -321,11 +516,11 @@ def transcribe(client, path, model):
         segments_list = []
         if t.segments:
             for seg in t.segments:
-                segments_list.append({
-                    "start": float(seg.get("start", seg.get("start", 0)) if isinstance(seg, dict) else getattr(seg, "start", 0)),
-                    "end": float(seg.get("end", seg.get("end", 0)) if isinstance(seg, dict) else getattr(seg, "end", 0)),
-                    "text": str(seg.get("text", "") if isinstance(seg, dict) else getattr(seg, "text", "")).strip()
-                })
+                if isinstance(seg, dict):
+                    s, e, tx = seg.get("start", 0), seg.get("end", 0), seg.get("text", "")
+                else:
+                    s, e, tx = getattr(seg, "start", 0), getattr(seg, "end", 0), getattr(seg, "text", "")
+                segments_list.append({"start": float(s), "end": float(e), "text": str(tx).strip()})
         return t.text, segments_list
     except Exception as e:
         st.error(f"Error de transcripción: {e}")
@@ -339,10 +534,7 @@ def _correct_chunk(client, text):
     try:
         r = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
-            messages=[
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": text}
-            ],
+            messages=[{"role": "system", "content": prompt}, {"role": "user", "content": text}],
             temperature=0.0
         )
         out = r.choices[0].message.content.strip()
@@ -360,7 +552,6 @@ def realign_segments(corrected_text, original_segments):
     total_orig = sum(len(s["text"].split()) for s in original_segments)
     if total_orig == 0:
         return original_segments
-
     aligned = []
     idx = 0
     for i, seg in enumerate(original_segments):
@@ -368,160 +559,112 @@ def realign_segments(corrected_text, original_segments):
         if i == len(original_segments) - 1:
             chunk = words[idx:]
         else:
-            ratio = seg_wc / total_orig
-            take = max(1, round(ratio * len(words)))
+            take = max(1, round((seg_wc / total_orig) * len(words)))
             chunk = words[idx:idx + take]
             idx += len(chunk)
-
-        aligned.append({
-            "start": seg["start"],
-            "end": seg["end"],
-            "text": " ".join(chunk) if chunk else seg["text"]
-        })
+        aligned.append({"start": seg["start"], "end": seg["end"], "text": " ".join(chunk) if chunk else seg["text"]})
     return aligned
 
 
 def correct_and_align(client, raw_text, segments):
-    MAX_CHUNK = 5000
-    if len(raw_text) <= MAX_CHUNK:
+    MAX = 5000
+    if len(raw_text) <= MAX:
         corrected = _correct_chunk(client, raw_text)
     else:
         sentences = raw_text.split(". ")
-        chunks, current = [], ""
+        chunks, cur = [], ""
         for s in sentences:
-            if len(current) + len(s) < MAX_CHUNK:
-                current += s + ". "
+            if len(cur) + len(s) < MAX:
+                cur += s + ". "
             else:
-                chunks.append(current.strip())
-                current = s + ". "
-        if current.strip():
-            chunks.append(current.strip())
-
+                chunks.append(cur.strip())
+                cur = s + ". "
+        if cur.strip():
+            chunks.append(cur.strip())
         parts = []
-        bar = st.progress(0, text="Corrigiendo ortografía...")
+        bar = st.progress(0, text="Corrigiendo...")
         for i, c in enumerate(chunks):
             parts.append(_correct_chunk(client, c))
-            bar.progress((i + 1) / len(chunks), text=f"Corrigiendo... {i+1}/{len(chunks)}")
+            bar.progress((i + 1) / len(chunks), text=f"Bloque {i+1}/{len(chunks)}")
         bar.empty()
         corrected = " ".join(parts)
-
-    corrected_segs = realign_segments(corrected, segments)
-    return corrected, corrected_segs
+    return corrected, realign_segments(corrected, segments)
 
 
 # --- BÚSQUEDA ---
-def search_segments(query, segments, corrected_segments, context_words=25, fuzzy_thresh=0.75):
+def search_segments(query, segments, corrected_segments, context_words=20, fuzzy_thresh=0.75):
     if not query:
         return []
-
     target = corrected_segments if corrected_segments else segments
     if not target:
         return []
 
-    results = []
     q_norm = norm(query)
     q_words = q_norm.split()
-
     if not q_words:
         return []
 
-    # Construir lista plana de palabras con referencia a segmento
     all_words = []
     for si, seg in enumerate(target):
-        seg_text = seg.get("text", "")
-        if seg_text:
-            for wi, w in enumerate(seg_text.split()):
-                all_words.append((w, si))
-
+        for w in seg.get("text", "").split():
+            all_words.append((w, si))
     if not all_words:
         return []
 
-    search_words_norm = [norm(w) for w, _ in all_words]
-    found_positions = []
+    search_norm = [norm(w) for w, _ in all_words]
+    found = []
 
-    # Búsqueda exacta de frase
-    for i in range(len(search_words_norm) - len(q_words) + 1):
-        window = " ".join(search_words_norm[i:i + len(q_words)])
+    # Exacta
+    for i in range(len(search_norm) - len(q_words) + 1):
+        window = " ".join(search_norm[i:i + len(q_words)])
         if q_norm in window:
-            found_positions.append({
-                "pos": i,
-                "length": len(q_words),
-                "confidence": "high",
-                "score": 1.0,
-                "seg_idx": all_words[i][1]
-            })
+            found.append({"pos": i, "len": len(q_words), "conf": "high", "score": 1.0, "seg": all_words[i][1]})
 
-    # Fuzzy por segmento si no hay exactos
-    if not found_positions and fuzzy_thresh < 1.0:
-        word_offset = 0
+    # Fuzzy
+    if not found and fuzzy_thresh < 1.0:
+        offset = 0
         for si, seg in enumerate(target):
-            seg_text = seg.get("text", "")
-            if not seg_text:
+            txt = seg.get("text", "")
+            if not txt:
                 continue
-            score = SequenceMatcher(None, q_norm, norm(seg_text)).ratio()
-            if score >= fuzzy_thresh:
-                wc = len(seg_text.split())
-                conf = "medium" if score > 0.85 else "low"
-                found_positions.append({
-                    "pos": word_offset,
-                    "length": wc,
-                    "confidence": conf,
-                    "score": score,
-                    "seg_idx": si
-                })
-            word_offset += len(seg_text.split())
+            sc = SequenceMatcher(None, q_norm, norm(txt)).ratio()
+            if sc >= fuzzy_thresh:
+                wc = len(txt.split())
+                found.append({"pos": offset, "len": wc, "conf": "medium" if sc > 0.85 else "low", "score": sc, "seg": si})
+            offset += len(txt.split())
 
-    # Deduplicar por segmento
     seen = set()
-    for fp in found_positions:
-        seg_idx = fp["seg_idx"]
-        if seg_idx in seen:
+    results = []
+    for fp in found:
+        if fp["seg"] in seen:
             continue
-        seen.add(seg_idx)
+        seen.add(fp["seg"])
+        seg = target[fp["seg"]]
+        p, ln = fp["pos"], fp["len"]
+        cs = max(0, p - context_words)
+        ce = min(len(all_words), p + ln + context_words)
+        me = min(p + ln, len(all_words))
 
-        pos = fp["pos"]
-        length = fp["length"]
-        seg = target[seg_idx]
-
-        ctx_start = max(0, pos - context_words)
-        ctx_end = min(len(all_words), pos + length + context_words)
-
-        before_words = [all_words[j][0] for j in range(ctx_start, pos)]
-        match_end = min(pos + length, len(all_words))
-        match_words = [all_words[j][0] for j in range(pos, match_end)]
-        after_words = [all_words[j][0] for j in range(match_end, ctx_end)]
-
-        before_text = " ".join(before_words)
-        match_text = " ".join(match_words)
-        after_text = " ".join(after_words)
-
-        match_hl = highlight_html(match_text, query)
-
-        start_time = float(seg.get("start", 0))
+        before = " ".join(all_words[j][0] for j in range(cs, p))
+        match = " ".join(all_words[j][0] for j in range(p, me))
+        after = " ".join(all_words[j][0] for j in range(me, ce))
 
         results.append({
-            "start_time": start_time,
-            "time_label": fmt_time(start_time),
-            "before": before_text,
-            "match_hl": match_hl,
-            "after": after_text,
-            "confidence": fp["confidence"],
+            "start_time": float(seg.get("start", 0)),
+            "time_label": fmt_time(float(seg.get("start", 0))),
+            "before": before,
+            "match_hl": highlight_html(match, query),
+            "after": after,
+            "confidence": fp["conf"],
             "score": fp["score"],
-            "idx": seg_idx,
+            "idx": fp["seg"],
         })
 
     results.sort(key=lambda x: x["score"], reverse=True)
     return results
 
 
-def build_full_text_html(text, query):
-    if not query:
-        return f"<div class='full-text-container'>{text}</div>"
-    highlighted = highlight_html(text, query)
-    return f"<div class='full-text-container'>{highlighted}</div>"
-
-
-# --- APP PRINCIPAL ---
+# --- APP ---
 def main_app():
     client = get_client()
     if not client:
@@ -529,256 +672,268 @@ def main_app():
 
     # Sidebar
     with st.sidebar:
-        st.markdown("### ⚙️ Ajustes")
-        model = st.selectbox("Modelo", ["whisper-large-v3", "whisper-large-v3-turbo"],
-                             format_func=lambda x: x.replace("whisper-large-", "Whisper ").upper())
-        correct = st.toggle("Corrección ortográfica", value=True)
-        st.divider()
-        st.markdown("##### Búsqueda")
-        ctx_words = st.slider("Palabras de contexto", 10, 50, 25, step=5)
-        use_fuzzy = st.toggle("Búsqueda aproximada", value=True)
-        fuzzy_t = st.slider("Sensibilidad", 0.5, 1.0, 0.75, step=0.05) if use_fuzzy else 1.0
-        st.divider()
+        st.markdown("#### ⚙️ Configuración")
+        model = st.selectbox("Modelo Whisper", ["whisper-large-v3", "whisper-large-v3-turbo"],
+                             format_func=lambda x: "V3 Precisión" if "turbo" not in x else "V3 Turbo")
+        do_correct = st.toggle("Corrección ortográfica", value=True)
+        st.markdown("---")
+        st.markdown("#### 🔍 Búsqueda")
+        ctx_w = st.slider("Palabras contexto", 8, 40, 20, step=4)
+        use_fuzzy = st.toggle("Aproximada (fuzzy)", value=True)
+        fuzzy_t = st.slider("Sensibilidad", 0.5, 1.0, 0.75, 0.05) if use_fuzzy else 1.0
+        st.markdown("---")
         if st.button("🚪 Cerrar sesión", use_container_width=True):
-            for key in list(st.session_state.keys()):
-                del st.session_state[key]
+            for k in list(st.session_state.keys()):
+                del st.session_state[k]
             st.rerun()
 
-    # Header
+    # Header bar
     st.markdown("""
-    <div class="app-header">
-        <h1>🎙️ Transcriptor Pro</h1>
-        <span class="subtitle">Transcripción · Búsqueda · Chat IA</span>
+    <div class="app-bar">
+        <div class="app-bar-left">
+            <div class="app-logo">🎙️</div>
+            <span class="app-name">Transcriptor Pro</span>
+            <span class="app-tag">BETA</span>
+        </div>
     </div>
     """, unsafe_allow_html=True)
 
-    # Upload
-    col_up, col_btn = st.columns([3, 1])
-    with col_up:
-        uploaded = st.file_uploader("Audio", type=["mp3", "wav", "m4a", "ogg", "mp4"],
-                                     label_visibility="collapsed")
-    with col_btn:
-        st.markdown("<br>", unsafe_allow_html=True)
-        do_transcribe = st.button("🚀 Transcribir", type="primary",
-                                   use_container_width=True, disabled=not uploaded)
+    # --- SIN TRANSCRIPCIÓN: Pantalla de carga ---
+    if not st.session_state.transcript_text:
+        col_l, col_c, col_r = st.columns([1, 2, 1])
+        with col_c:
+            st.markdown("""
+            <div class="empty-state">
+                <div class="empty-state-icon">📂</div>
+                <div class="empty-state-title">Sube un archivo de audio</div>
+                <div class="empty-state-text">MP3, WAV, M4A, OGG o MP4 · Máximo 25 MB</div>
+            </div>
+            """, unsafe_allow_html=True)
 
-    if uploaded and do_transcribe:
-        size_mb = len(uploaded.getvalue()) / (1024 * 1024)
-        if size_mb > 25:
-            st.error(f"Archivo demasiado grande ({size_mb:.1f} MB). Máximo: 25 MB.")
-        else:
-            st.session_state.search_results = None
-            st.session_state.last_search_query = ""
+            uploaded = st.file_uploader("audio", type=["mp3", "wav", "m4a", "ogg", "mp4"],
+                                         label_visibility="collapsed")
 
-            with st.status("Procesando audio...", expanded=True) as status:
-                path = save_uploaded(uploaded)
-                if not path:
-                    st.error("Error guardando archivo")
-                    st.stop()
-
-                st.session_state.audio_path = path
-                st.write(f"📁 {uploaded.name} ({size_mb:.1f} MB)")
-
-                st.write("🎧 Transcribiendo...")
-                raw, segs = transcribe(client, path, model)
-                if not raw or not segs:
-                    st.error("No se pudo transcribir el audio.")
-                    st.stop()
-
-                st.session_state.raw_transcript = raw
-                st.session_state.transcript_segments = segs
-
-                if correct:
-                    st.write("✨ Corrigiendo ortografía...")
-                    txt, csegs = correct_and_align(client, raw, segs)
-                    st.session_state.transcript_text = txt
-                    st.session_state.corrected_segments = csegs
-                    st.session_state.correction_applied = True
+            if uploaded:
+                size_mb = len(uploaded.getvalue()) / (1024 * 1024)
+                if size_mb > 25:
+                    st.error(f"Archivo muy grande ({size_mb:.1f} MB)")
                 else:
-                    st.session_state.transcript_text = raw
-                    st.session_state.corrected_segments = segs
-                    st.session_state.correction_applied = False
+                    if st.button("🚀 Transcribir", type="primary", use_container_width=True):
+                        with st.status("Procesando...", expanded=True) as status:
+                            path = save_uploaded(uploaded)
+                            if not path:
+                                st.error("Error al guardar")
+                                st.stop()
+                            st.session_state.audio_path = path
+                            st.write(f"📁 {uploaded.name} ({size_mb:.1f} MB)")
 
-                st.session_state.audio_start_time = 0
-                word_count = len(raw.split())
-                seg_count = len(segs)
-                status.update(label=f"✅ Listo — {word_count} palabras, {seg_count} segmentos",
-                              state="complete", expanded=False)
+                            st.write("🎧 Transcribiendo...")
+                            raw, segs = transcribe(client, path, model)
+                            if not raw or not segs:
+                                st.error("Error en transcripción")
+                                st.stop()
 
-    # Reproductor
+                            st.session_state.raw_transcript = raw
+                            st.session_state.transcript_segments = segs
+
+                            if do_correct:
+                                st.write("✨ Corrigiendo ortografía...")
+                                txt, csegs = correct_and_align(client, raw, segs)
+                                st.session_state.transcript_text = txt
+                                st.session_state.corrected_segments = csegs
+                                st.session_state.correction_applied = True
+                            else:
+                                st.session_state.transcript_text = raw
+                                st.session_state.corrected_segments = segs
+                                st.session_state.correction_applied = False
+
+                            st.session_state.audio_start_time = 0
+                            status.update(label=f"✅ {len(raw.split())} palabras · {len(segs)} segmentos",
+                                          state="complete", expanded=False)
+                            st.rerun()
+        return
+
+    # --- CON TRANSCRIPCIÓN: UI principal ---
+    # Player compacto
     if st.session_state.audio_path:
-        start_t = int(max(0, st.session_state.audio_start_time))
-        st.audio(st.session_state.audio_path, start_time=start_t)
+        st.audio(st.session_state.audio_path, start_time=int(max(0, st.session_state.audio_start_time)))
 
-    # Contenido
-    if st.session_state.transcript_text:
-        txt = st.session_state.transcript_text
-        words_total = len(txt.split())
-        segs_total = len(st.session_state.corrected_segments or [])
-        corr_label = "✅ Corregido" if st.session_state.correction_applied else "📝 Original"
-        st.markdown(f"""
-        <div class="stats-row">
-            <span class="stat-item"><strong>{words_total:,}</strong> palabras</span>
-            <span class="stat-item"><strong>{segs_total}</strong> segmentos</span>
-            <span class="stat-item">{corr_label}</span>
-        </div>
-        """, unsafe_allow_html=True)
+    # Stats
+    txt = st.session_state.transcript_text
+    n_words = len(txt.split())
+    n_segs = len(st.session_state.corrected_segments or [])
+    corr_html = '<span class="stat-chip stat-chip-ok">✓ Corregido</span>' if st.session_state.correction_applied else '<span class="stat-chip">Original</span>'
+    st.markdown(f"""
+    <div class="stats-bar">
+        <span class="stat-chip"><strong>{n_words:,}</strong> palabras</span>
+        <span class="stat-chip"><strong>{n_segs}</strong> segmentos</span>
+        {corr_html}
+    </div>
+    """, unsafe_allow_html=True)
 
-        tab1, tab2, tab3 = st.tabs(["🔍 Búsqueda", "💬 Chat IA", "📥 Exportar"])
+    # Tabs
+    tab_search, tab_chat, tab_export = st.tabs(["🔍 Búsqueda", "💬 Chat IA", "📥 Exportar"])
 
-        # --- TAB BÚSQUEDA ---
-        with tab1:
-            c1, c2 = st.columns([5, 1])
-            with c1:
-                query = st.text_input("Buscar en transcripción",
-                                       placeholder="Escribe una palabra o frase...",
-                                       label_visibility="collapsed",
-                                       key="search_input")
-            with c2:
-                search_btn = st.button("Buscar", type="primary", use_container_width=True)
+    # ========== BÚSQUEDA ==========
+    with tab_search:
+        c1, c2 = st.columns([6, 1])
+        with c1:
+            query = st.text_input("q", placeholder="Buscar palabra o frase...",
+                                   label_visibility="collapsed", key="q_input")
+        with c2:
+            do_search = st.button("Buscar", type="primary", use_container_width=True)
 
-            if search_btn and query:
-                st.session_state.last_search_query = query
-                st.session_state.search_results = search_segments(
-                    query,
-                    st.session_state.transcript_segments,
-                    st.session_state.corrected_segments,
-                    context_words=ctx_words,
-                    fuzzy_thresh=fuzzy_t if use_fuzzy else 1.0
-                )
-            elif search_btn and not query:
-                st.session_state.last_search_query = ""
-                st.session_state.search_results = None
+        if do_search and query:
+            st.session_state.last_search_query = query
+            st.session_state.search_results = search_segments(
+                query, st.session_state.transcript_segments,
+                st.session_state.corrected_segments,
+                context_words=ctx_w, fuzzy_thresh=fuzzy_t if use_fuzzy else 1.0
+            )
+        elif do_search and not query:
+            st.session_state.last_search_query = ""
+            st.session_state.search_results = None
 
-            active_query = st.session_state.last_search_query
-            results = st.session_state.search_results
+        aq = st.session_state.last_search_query
+        res = st.session_state.search_results
 
-            if active_query and results:
-                st.caption(f"{len(results)} resultado{'s' if len(results) != 1 else ''} para **\"{active_query}\"**")
+        # Resultados
+        if aq and res:
+            st.caption(f"**{len(res)}** resultado{'s' if len(res) != 1 else ''} para \"{aq}\"")
 
-                for i, r in enumerate(results):
-                    col_time, col_text = st.columns([1, 5])
-                    with col_time:
-                        btn_key = f"play_{i}_{r['idx']}"
-                        if st.button(f"▶ {r['time_label']}", key=btn_key,
-                                     help="Reproducir desde aquí"):
-                            st.session_state.audio_start_time = max(0, r["start_time"] - 2)
+            for i, r in enumerate(res):
+                badge_cls = f"sr-badge-{r['confidence']}"
+                before_h = f"<span class='sr-ctx'>...{r['before']} </span>" if r['before'] else ""
+                after_h = f"<span class='sr-ctx'> {r['after']}...</span>" if r['after'] else ""
+
+                rcol1, rcol2 = st.columns([0.6, 5])
+                with rcol1:
+                    if st.button(f"▶ {r['time_label']}", key=f"p_{i}_{r['idx']}"):
+                        st.session_state.audio_start_time = max(0, r["start_time"] - 2)
+                        st.rerun()
+                with rcol2:
+                    st.markdown(f"""
+                    <div class="sr-card">
+                        <div class="sr-head">
+                            <span class="sr-time">{r['time_label']}</span>
+                            <span class="sr-badge {badge_cls}">{r['confidence']}</span>
+                        </div>
+                        <div class="sr-body">{before_h}{r['match_hl']}{after_h}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+        elif aq and res is not None and len(res) == 0:
+            st.markdown("""
+            <div class="no-results-box">
+                🔍 Sin resultados. Prueba con otras palabras.
+            </div>
+            """, unsafe_allow_html=True)
+
+        # Texto completo
+        st.markdown("---")
+        with st.expander("📄 Texto completo", expanded=not bool(aq)):
+            hl_text = highlight_html(txt, aq) if aq else txt
+            st.markdown(f"<div class='full-text-box'>{hl_text}</div>", unsafe_allow_html=True)
+
+        # Nuevo audio
+        with st.expander("📂 Transcribir otro archivo"):
+            new_file = st.file_uploader("nuevo", type=["mp3", "wav", "m4a", "ogg", "mp4"],
+                                         label_visibility="collapsed", key="new_upload")
+            if new_file and st.button("🔄 Transcribir nuevo", type="primary"):
+                size_mb = len(new_file.getvalue()) / (1024 * 1024)
+                if size_mb > 25:
+                    st.error("Archivo muy grande")
+                else:
+                    # Reset
+                    st.session_state.search_results = None
+                    st.session_state.last_search_query = ""
+                    st.session_state.chat_history = []
+                    with st.status("Procesando...", expanded=True) as status:
+                        path = save_uploaded(new_file)
+                        st.session_state.audio_path = path
+                        raw, segs = transcribe(client, path, model)
+                        if raw and segs:
+                            st.session_state.raw_transcript = raw
+                            st.session_state.transcript_segments = segs
+                            if do_correct:
+                                t2, cs2 = correct_and_align(client, raw, segs)
+                                st.session_state.transcript_text = t2
+                                st.session_state.corrected_segments = cs2
+                                st.session_state.correction_applied = True
+                            else:
+                                st.session_state.transcript_text = raw
+                                st.session_state.corrected_segments = segs
+                                st.session_state.correction_applied = False
+                            st.session_state.audio_start_time = 0
+                            status.update(label="✅ Listo", state="complete")
                             st.rerun()
 
-                    with col_text:
-                        badge_class = f"badge-{r['confidence']}"
-                        before_html = f"<span class='ctx'>...{r['before']} </span>" if r['before'] else ""
-                        after_html = f"<span class='ctx'> {r['after']}...</span>" if r['after'] else ""
-                        st.markdown(f"""
-                        <div class="search-result">
-                            <div class="result-header">
-                                <span class="timestamp-chip">{r['time_label']}</span>
-                                <span class="badge {badge_class}">{r['confidence']}</span>
-                            </div>
-                            <div class="result-text">
-                                {before_html}{r['match_hl']}{after_html}
-                            </div>
-                        </div>
-                        """, unsafe_allow_html=True)
+    # ========== CHAT ==========
+    with tab_chat:
+        for msg in st.session_state.chat_history:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
 
-            elif active_query and results is not None and len(results) == 0:
-                st.markdown("""
-                <div class="no-results">
-                    <p>🔍 No se encontraron resultados</p>
-                    <p style="font-size:0.8rem">Intenta con otras palabras o activa la búsqueda aproximada</p>
-                </div>
-                """, unsafe_allow_html=True)
+        if not st.session_state.chat_history:
+            st.markdown("""
+            <div class="empty-state" style="padding:24px">
+                <div class="empty-state-icon">💬</div>
+                <div class="empty-state-title">Pregunta lo que quieras</div>
+                <div class="empty-state-text">El asistente conoce toda la transcripción</div>
+            </div>
+            """, unsafe_allow_html=True)
 
-            st.markdown("---")
-            st.markdown("##### 📄 Texto completo")
-            full_html = build_full_text_html(st.session_state.transcript_text, active_query)
-            st.markdown(full_html, unsafe_allow_html=True)
+        if prompt := st.chat_input("Pregunta sobre el audio..."):
+            st.session_state.chat_history.append({"role": "user", "content": prompt})
+            with st.chat_message("user"):
+                st.markdown(prompt)
+            with st.chat_message("assistant"):
+                ph = st.empty()
+                full = ""
+                try:
+                    ctx = st.session_state.transcript_text[:15000]
+                    stream = client.chat.completions.create(
+                        model="llama-3.3-70b-versatile",
+                        messages=[
+                            {"role": "system", "content":
+                             f"Responde basándote en esta transcripción. Sé conciso y en español.\n\nTRANSCRIPCIÓN:\n{ctx}"},
+                            *[{"role": m["role"], "content": m["content"]} for m in st.session_state.chat_history[-6:]],
+                        ],
+                        stream=True, max_tokens=2048,
+                    )
+                    for chunk in stream:
+                        if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
+                            full += chunk.choices[0].delta.content
+                            ph.markdown(full + "▌")
+                    ph.markdown(full)
+                    st.session_state.chat_history.append({"role": "assistant", "content": full})
+                except Exception as e:
+                    st.error(f"Error: {e}")
 
-        # --- TAB CHAT ---
-        with tab2:
-            for msg in st.session_state.chat_history:
-                with st.chat_message(msg["role"]):
-                    st.markdown(msg["content"])
+    # ========== EXPORTAR ==========
+    with tab_export:
+        c1, c2 = st.columns(2)
+        with c1:
+            st.download_button("📄 Texto (.txt)", data=txt, file_name="transcripcion.txt",
+                               mime="text/plain", use_container_width=True)
+        with c2:
+            srt = []
+            for i, seg in enumerate(st.session_state.corrected_segments or []):
+                s, e = float(seg.get("start", 0)), float(seg.get("end", 0))
+                srt.append(f"{i+1}")
+                srt.append(f"{int(s//3600):02d}:{int((s%3600)//60):02d}:{s%60:06.3f} --> "
+                           f"{int(e//3600):02d}:{int((e%3600)//60):02d}:{e%60:06.3f}")
+                srt.append(seg.get("text", ""))
+                srt.append("")
+            st.download_button("🎬 Subtítulos (.srt)", data="\n".join(srt) or "Sin datos",
+                               file_name="transcripcion.srt", mime="text/plain", use_container_width=True)
 
-            if prompt := st.chat_input("Pregunta sobre el audio..."):
-                st.session_state.chat_history.append({"role": "user", "content": prompt})
-                with st.chat_message("user"):
-                    st.markdown(prompt)
-
-                with st.chat_message("assistant"):
-                    placeholder = st.empty()
-                    full = ""
-                    try:
-                        ctx = st.session_state.transcript_text[:15000]
-                        stream = client.chat.completions.create(
-                            model="llama-3.3-70b-versatile",
-                            messages=[
-                                {"role": "system",
-                                 "content": (
-                                     "Eres un asistente que responde preguntas basándose en esta transcripción de audio. "
-                                     "Responde en español, sé conciso y preciso. Si no encuentras la información, dilo.\n\n"
-                                     f"TRANSCRIPCIÓN:\n{ctx}"
-                                 )},
-                                *[{"role": m["role"], "content": m["content"]}
-                                  for m in st.session_state.chat_history[-6:]],
-                            ],
-                            stream=True,
-                            max_tokens=2048,
-                        )
-                        for chunk in stream:
-                            if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
-                                full += chunk.choices[0].delta.content
-                                placeholder.markdown(full + "▌")
-                        placeholder.markdown(full)
-                        st.session_state.chat_history.append({"role": "assistant", "content": full})
-                    except Exception as e:
-                        st.error(f"Error: {e}")
-
-        # --- TAB EXPORTAR ---
-        with tab3:
-            st.markdown("##### Descargar transcripción")
-            c1, c2 = st.columns(2)
-
-            with c1:
-                st.download_button(
-                    "📄 Texto plano (.txt)",
-                    data=st.session_state.transcript_text,
-                    file_name="transcripcion.txt",
-                    mime="text/plain",
-                    use_container_width=True
-                )
-
-            with c2:
-                srt_lines = []
-                segs_export = st.session_state.corrected_segments or st.session_state.transcript_segments or []
-                for i, seg in enumerate(segs_export):
-                    s = float(seg.get("start", 0))
-                    e = float(seg.get("end", 0))
-                    sh, sm, ss = int(s // 3600), int((s % 3600) // 60), s % 60
-                    eh, em, es = int(e // 3600), int((e % 3600) // 60), e % 60
-                    srt_lines.append(f"{i+1}")
-                    srt_lines.append(f"{sh:02d}:{sm:02d}:{ss:06.3f} --> {eh:02d}:{em:02d}:{es:06.3f}")
-                    srt_lines.append(seg.get("text", ""))
-                    srt_lines.append("")
-
-                srt_content = "\n".join(srt_lines) if srt_lines else "Sin segmentos"
-
-                st.download_button(
-                    "🎬 Subtítulos (.srt)",
-                    data=srt_content,
-                    file_name="transcripcion.srt",
-                    mime="text/plain",
-                    use_container_width=True
-                )
-
-            if st.toggle("Ver transcripción con timestamps"):
-                segs_show = st.session_state.corrected_segments or []
-                for seg in segs_show:
-                    t_label = fmt_time(float(seg.get("start", 0)))
-                    st.markdown(f"`{t_label}` {seg.get('text', '')}")
+        if st.toggle("Ver con timestamps"):
+            for seg in (st.session_state.corrected_segments or []):
+                st.markdown(f"`{fmt_time(float(seg.get('start',0)))}` {seg.get('text','')}")
 
 
-# --- ENTRY POINT ---
+# --- ENTRY ---
 if __name__ == "__main__":
     if check_password():
         main_app()
