@@ -14,7 +14,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# --- CSS MODERNO NARANJA ---
+# --- CSS ---
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
@@ -25,15 +25,12 @@ st.markdown("""
         --primary-hover: #c2410c;
         --primary-light: #fff7ed;
         --primary-subtle: #fed7aa;
-        --primary-grad-start: #ea580c;
-        --primary-grad-end: #dc2626;
         --surface: #ffffff;
         --bg: #fafaf9;
         --text: #1c1917;
         --text-secondary: #78716c;
         --text-muted: #a8a29e;
         --border: #e7e5e4;
-        --border-hover: #d6d3d1;
         --green: #059669;
         --green-bg: #ecfdf5;
         --amber: #d97706;
@@ -60,10 +57,20 @@ st.markdown("""
     #MainMenu, footer, header { visibility: hidden; }
     .stDeployButton { display: none; }
 
+    /* Ocultar TODOS los labels de uploaders, toggles, sliders internos */
+    .stFileUploader > label,
+    .stFileUploader [data-testid="stFileUploaderDropzoneInstructions"] > div > span,
+    .uploadedFileName { font-size: 0.78rem !important; }
+
+    /* Ocultar textos fantasma de expander arrow */
+    details > summary > span > div[data-testid="stMarkdownContainer"] > p {
+        font-size: 0.85rem !important;
+    }
+
     /* LOGIN */
     .login-icon {
         width: 56px; height: 56px;
-        background: linear-gradient(135deg, var(--primary-grad-start), var(--primary-grad-end));
+        background: linear-gradient(135deg, #ea580c, #dc2626);
         border-radius: 16px;
         display: inline-flex; align-items: center; justify-content: center;
         font-size: 24px; margin-bottom: 16px;
@@ -72,21 +79,18 @@ st.markdown("""
     .login-subtitle { font-size: 0.85rem; color: var(--text-secondary); margin: 0 0 24px 0; }
 
     /* HEADER */
-    .app-bar {
-        display: flex; align-items: center; padding: 8px 0; margin-bottom: 8px;
-    }
+    .app-bar { display: flex; align-items: center; padding: 8px 0; margin-bottom: 8px; }
     .app-bar-left { display: flex; align-items: center; gap: 10px; }
     .app-logo {
         width: 36px; height: 36px;
-        background: linear-gradient(135deg, var(--primary-grad-start), var(--primary-grad-end));
+        background: linear-gradient(135deg, #ea580c, #dc2626);
         border-radius: 10px; display: flex; align-items: center; justify-content: center;
-        font-size: 18px; color: white; flex-shrink: 0;
+        font-size: 18px; color: white;
     }
-    .app-name { font-size: 1.1rem; font-weight: 700; color: var(--text); letter-spacing: -0.3px; }
+    .app-name { font-size: 1.1rem; font-weight: 700; color: var(--text); }
     .app-tag {
         font-size: 0.6rem; background: var(--primary-light); color: var(--primary);
-        padding: 2px 8px; border-radius: 20px; font-weight: 600; letter-spacing: 0.4px;
-        text-transform: uppercase;
+        padding: 2px 8px; border-radius: 20px; font-weight: 600; text-transform: uppercase;
     }
 
     /* STATS */
@@ -115,7 +119,7 @@ st.markdown("""
     }
     .sr-badge {
         font-size: 0.6rem; font-weight: 700; padding: 1px 6px;
-        border-radius: 4px; text-transform: uppercase; letter-spacing: 0.5px;
+        border-radius: 4px; text-transform: uppercase;
     }
     .sr-badge-high { background: var(--green-bg); color: var(--green); }
     .sr-badge-medium { background: var(--amber-bg); color: var(--amber); }
@@ -124,9 +128,8 @@ st.markdown("""
     .sr-ctx { color: var(--text-muted); }
 
     .hl {
-        background: linear-gradient(120deg, #fed7aa 0%, #fdba74 100%);
+        background: linear-gradient(120deg, #fed7aa, #fdba74);
         color: var(--text); padding: 1px 4px; border-radius: 3px; font-weight: 600;
-        box-decoration-break: clone; -webkit-box-decoration-break: clone;
     }
 
     /* TEXTO COMPLETO */
@@ -139,7 +142,7 @@ st.markdown("""
     .full-text-box::-webkit-scrollbar { width: 5px; }
     .full-text-box::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 
-    /* EMPTY STATE */
+    /* EMPTY */
     .empty-state { text-align: center; padding: 40px 20px; color: var(--text-muted); }
     .empty-state-icon { font-size: 2.5rem; margin-bottom: 8px; opacity: 0.6; }
     .empty-state-title { font-size: 0.95rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 4px; }
@@ -167,15 +170,12 @@ st.markdown("""
     .stTabs [data-baseweb="tab-panel"] { padding-top: 10px; }
     .stTabs [data-baseweb="tab-highlight"], .stTabs [data-baseweb="tab-border"] { display: none; }
 
-    /* SIDEBAR */
     section[data-testid="stSidebar"] { background: var(--surface); border-right: 1px solid var(--border); }
 
-    /* BOTONES */
     .stButton > button { border-radius: var(--radius-xs) !important; font-weight: 500 !important; font-size: 0.82rem !important; }
     .stButton > button[kind="primary"] { background: var(--primary) !important; border: none !important; }
     .stButton > button[kind="primary"]:hover { background: var(--primary-hover) !important; }
 
-    /* INPUTS */
     .stTextInput > div > div > input {
         border-radius: var(--radius-xs) !important; border-color: var(--border) !important; font-size: 0.85rem !important;
     }
@@ -186,9 +186,6 @@ st.markdown("""
     .stAudio { margin: 4px 0 8px 0; }
     .stChatMessage { font-size: 0.88rem; }
     hr { border-color: var(--border) !important; margin: 8px 0 !important; }
-
-    /* Ocultar labels de file_uploader */
-    .stFileUploader label { display: none !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -269,13 +266,11 @@ def check_password():
             <p class="login-subtitle">Ingresa tu contraseña para continuar</p>
         </div>
         """, unsafe_allow_html=True)
-
         st.text_input(
             "pwd", type="password", label_visibility="collapsed",
             placeholder="Contraseña...", key="_pwd_input", on_change=do_login
         )
         st.button("Ingresar", use_container_width=True, type="primary", on_click=do_login)
-
         if st.session_state.get("_login_error"):
             st.error(st.session_state._login_error)
             st.session_state._login_error = None
@@ -458,32 +453,34 @@ def search_segments(query, segments, corrected_segments, context_words=20, fuzzy
 
 
 def reset_search():
-    """Limpia búsqueda y resultados por completo."""
     st.session_state.search_results = None
     st.session_state.last_search_query = ""
 
 
-def reset_all_transcript():
-    """Limpia todo para un nuevo audio."""
-    st.session_state.transcript_text = None
-    st.session_state.transcript_segments = None
-    st.session_state.corrected_segments = None
-    st.session_state.raw_transcript = None
-    st.session_state.audio_path = None
-    st.session_state.audio_start_time = 0
-    st.session_state.chat_history = []
-    st.session_state.correction_applied = False
-    reset_search()
+def reset_all():
+    for k, v in DEFAULTS.items():
+        if k != "authenticated":
+            st.session_state[k] = v
+
+
+def build_timestamped_transcript(segments):
+    """Construye transcripción con timestamps para el contexto del chat."""
+    lines = []
+    for seg in segments:
+        t = fmt_time(float(seg.get("start", 0)))
+        txt = seg.get("text", "").strip()
+        if txt:
+            lines.append(f"[{t}] {txt}")
+    return "\n".join(lines)
 
 
 def process_audio(client, uploaded, model, do_correct):
-    """Procesa un archivo de audio completo."""
     size_mb = len(uploaded.getvalue()) / (1024 * 1024)
     if size_mb > 25:
         st.error(f"Archivo muy grande ({size_mb:.1f} MB). Máximo 25 MB.")
         return False
 
-    reset_all_transcript()
+    reset_all()
 
     with st.status("Procesando audio...", expanded=True) as status:
         path = save_uploaded(uploaded)
@@ -527,7 +524,6 @@ def main_app():
     if not client:
         st.stop()
 
-    # Sidebar
     with st.sidebar:
         st.markdown("#### ⚙️ Configuración")
         model = st.selectbox("Modelo Whisper", ["whisper-large-v3", "whisper-large-v3-turbo"],
@@ -568,10 +564,9 @@ def main_app():
             """, unsafe_allow_html=True)
 
             uploaded = st.file_uploader(
-                "Subir audio", type=["mp3", "wav", "m4a", "ogg", "mp4"],
+                "x", type=["mp3", "wav", "m4a", "ogg", "mp4"],
                 label_visibility="collapsed", key="upload_initial"
             )
-
             if uploaded:
                 if st.button("🚀 Transcribir", type="primary", use_container_width=True):
                     if process_audio(client, uploaded, model, do_correct):
@@ -579,11 +574,9 @@ def main_app():
         return
 
     # === CON TRANSCRIPCIÓN ===
-    # Player
     if st.session_state.audio_path:
         st.audio(st.session_state.audio_path, start_time=int(max(0, st.session_state.audio_start_time)))
 
-    # Stats
     txt = st.session_state.transcript_text
     n_words = len(txt.split())
     n_segs = len(st.session_state.corrected_segments or [])
@@ -597,7 +590,6 @@ def main_app():
     </div>
     """, unsafe_allow_html=True)
 
-    # Tabs
     tab_search, tab_chat, tab_export = st.tabs(["🔍 Búsqueda", "💬 Chat IA", "📥 Exportar"])
 
     # ===== BÚSQUEDA =====
@@ -605,7 +597,7 @@ def main_app():
         c1, c2 = st.columns([6, 1])
         with c1:
             query = st.text_input(
-                "Buscar", placeholder="Buscar palabra o frase...",
+                "q", placeholder="Buscar palabra o frase...",
                 label_visibility="collapsed", key="q_input"
             )
         with c2:
@@ -630,7 +622,6 @@ def main_app():
                 badge_cls = f"sr-badge-{r['confidence']}"
                 bh = f"<span class='sr-ctx'>...{r['before']} </span>" if r['before'] else ""
                 ah = f"<span class='sr-ctx'> {r['after']}...</span>" if r['after'] else ""
-
                 rc1, rc2 = st.columns([0.6, 5])
                 with rc1:
                     if st.button(f"▶ {r['time_label']}", key=f"p_{i}_{r['idx']}"):
@@ -653,16 +644,19 @@ def main_app():
             </div>
             """, unsafe_allow_html=True)
 
-        # Texto completo
+        # Texto completo - SIN expander para evitar el texto "arrow" fantasma
         st.markdown("---")
-        with st.expander("📄 Texto completo", expanded=not bool(aq)):
+        show_full = st.checkbox("📄 Mostrar texto completo", value=not bool(aq), key="show_full_text")
+        if show_full:
             hl_text = highlight_html(txt, aq) if aq else txt
             st.markdown(f"<div class='full-text-box'>{hl_text}</div>", unsafe_allow_html=True)
 
-        # Nuevo archivo
-        with st.expander("📂 Transcribir otro archivo"):
+        # Nuevo archivo - SIN expander
+        st.markdown("---")
+        show_new = st.checkbox("📂 Transcribir otro archivo", value=False, key="show_new_upload")
+        if show_new:
             new_file = st.file_uploader(
-                "Subir nuevo audio", type=["mp3", "wav", "m4a", "ogg", "mp4"],
+                "x2", type=["mp3", "wav", "m4a", "ogg", "mp4"],
                 label_visibility="collapsed", key="upload_new"
             )
             if new_file:
@@ -677,7 +671,7 @@ def main_app():
             <div class="empty-state" style="padding:24px">
                 <div class="empty-state-icon">💬</div>
                 <div class="empty-state-title">Pregunta lo que quieras</div>
-                <div class="empty-state-text">El asistente conoce toda la transcripción del audio</div>
+                <div class="empty-state-text">El asistente responde basándose exclusivamente en la transcripción con timestamps</div>
             </div>
             """, unsafe_allow_html=True)
 
@@ -693,16 +687,33 @@ def main_app():
                 ph = st.empty()
                 full = ""
                 try:
-                    ctx = st.session_state.transcript_text[:15000]
+                    # Construir contexto con timestamps
+                    segs_for_ctx = st.session_state.corrected_segments or st.session_state.transcript_segments or []
+                    timestamped_ctx = build_timestamped_transcript(segs_for_ctx)
+                    # Limitar a ~15000 chars
+                    if len(timestamped_ctx) > 15000:
+                        timestamped_ctx = timestamped_ctx[:15000] + "\n[...transcripción truncada...]"
+
+                    system_prompt = (
+                        "Eres un asistente que responde EXCLUSIVAMENTE con base en la transcripción de audio proporcionada. "
+                        "REGLAS ESTRICTAS:\n"
+                        "1. Solo responde con información que esté en la transcripción.\n"
+                        "2. Siempre incluye el timestamp [MM:SS] o [H:MM:SS] donde se menciona la información.\n"
+                        "3. Si la información NO está en la transcripción, responde: 'No encontré esa información en la transcripción.'\n"
+                        "4. NO inventes ni supongas información que no esté explícitamente en el texto.\n"
+                        "5. Responde en español, sé conciso y preciso.\n"
+                        "6. Cuando cites, usa el formato: \"...texto citado...\" [timestamp]\n\n"
+                        f"TRANSCRIPCIÓN CON TIMESTAMPS:\n{timestamped_ctx}"
+                    )
+
                     stream = client.chat.completions.create(
                         model="llama-3.3-70b-versatile",
                         messages=[
-                            {"role": "system", "content":
-                             f"Responde basándote en esta transcripción. Sé conciso, en español.\n\nTRANSCRIPCIÓN:\n{ctx}"},
+                            {"role": "system", "content": system_prompt},
                             *[{"role": m["role"], "content": m["content"]}
                               for m in st.session_state.chat_history[-6:]],
                         ],
-                        stream=True, max_tokens=2048,
+                        stream=True, max_tokens=2048, temperature=0.1,
                     )
                     for chunk in stream:
                         if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
@@ -734,8 +745,8 @@ def main_app():
                 "🎬 Subtítulos (.srt)", data="\n".join(srt) or "Sin datos",
                 file_name="transcripcion.srt", mime="text/plain", use_container_width=True
             )
-
-        if st.toggle("Ver con timestamps"):
+        show_ts = st.checkbox("Ver con timestamps", value=False, key="show_timestamps")
+        if show_ts:
             for seg in (st.session_state.corrected_segments or []):
                 st.markdown(f"`{fmt_time(float(seg.get('start',0)))}` {seg.get('text','')}")
 
