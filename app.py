@@ -1,5 +1,6 @@
 import streamlit as st
 import os
+import sys
 import tempfile
 import unicodedata
 from groq import Groq
@@ -138,6 +139,34 @@ st.markdown("""
         color: var(--text); padding: 1px 4px; border-radius: 3px; font-weight: 600;
     }
 
+    /* Segmento activo resaltado */
+    .seg-active {
+        background: linear-gradient(120deg, #fff7ed, #ffedd5);
+        border-left: 3px solid var(--primary);
+        padding: 6px 10px;
+        border-radius: 0 6px 6px 0;
+        margin: 2px 0;
+        transition: all 0.3s ease;
+    }
+    .seg-inactive {
+        padding: 6px 10px;
+        margin: 2px 0;
+        color: var(--text-secondary);
+        font-size: 0.82rem;
+        line-height: 1.6;
+        border-left: 3px solid transparent;
+    }
+    .seg-time-pill {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.65rem;
+        color: var(--primary);
+        background: var(--primary-light);
+        padding: 1px 5px;
+        border-radius: 3px;
+        margin-right: 6px;
+        cursor: pointer;
+    }
+
     .full-text-box {
         background: var(--surface); border: 1px solid var(--border);
         border-radius: var(--radius-sm); padding: 16px 20px;
@@ -211,6 +240,59 @@ st.markdown("""
     .coverage-ok { background: linear-gradient(90deg, #059669, #10b981); }
     .coverage-warn { background: linear-gradient(90deg, #d97706, #f59e0b); }
     .coverage-bad { background: linear-gradient(90deg, #dc2626, #ef4444); }
+
+    /* Visor de segmentos sincronizado */
+    .seg-viewer {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        max-height: 520px;
+        overflow-y: auto;
+        padding: 8px 4px;
+    }
+    .seg-viewer::-webkit-scrollbar { width: 4px; }
+    .seg-viewer::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+    .seg-row {
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+        padding: 5px 12px;
+        border-radius: 6px;
+        margin: 1px 4px;
+        transition: background 0.2s;
+        cursor: pointer;
+    }
+    .seg-row:hover { background: var(--primary-light); }
+    .seg-row.active {
+        background: linear-gradient(90deg, #fff7ed, #ffedd5);
+        border-left: 3px solid var(--primary);
+        padding-left: 9px;
+    }
+    .seg-row .seg-ts {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.63rem;
+        color: var(--primary);
+        background: var(--primary-light);
+        padding: 2px 6px;
+        border-radius: 3px;
+        white-space: nowrap;
+        margin-top: 2px;
+        min-width: 46px;
+        text-align: center;
+    }
+    .seg-row .seg-txt {
+        font-size: 0.82rem;
+        line-height: 1.55;
+        color: var(--text);
+    }
+    .seg-row.active .seg-txt {
+        font-weight: 500;
+        color: var(--text);
+    }
+    .seg-row:not(.active) .seg-txt {
+        color: var(--text-secondary);
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -234,10 +316,62 @@ DEFAULTS = {
     "coverage_pct": 100.0,
     "transcript_gaps": [],
     "chunks_used": 1,
+    "active_segment_idx": -1,      # índice del segmento activo en el visor
+    "pydub_available": None,       # None = no testeado, True/False según resultado
 }
 for k, v in DEFAULTS.items():
     if k not in st.session_state:
         st.session_state[k] = v
+
+
+# ============================================================
+# DIAGNÓSTICO DE DEPENDENCIAS (una sola vez por sesión)
+# ============================================================
+
+def check_pydub_ffmpeg():
+    """
+    Verifica que pydub y ffmpeg estén disponibles correctamente.
+    Corre solo una vez por sesión y guarda el resultado en session_state.
+    Retorna (ok: bool, message: str).
+    """
+    if st.session_state.pydub_available is not None:
+        return st.session_state.pydub_available, ""
+
+    # 1. Verificar importación de pydub
+    try:
+        from pydub import AudioSegment          # noqa: F401
+        from pydub.utils import which as p_which  # noqa: F401
+    except ImportError:
+        st.session_state.pydub_available = False
+        return False, "pydub no está instalado"
+
+    # 2. Verificar que ffmpeg esté en PATH (pydub lo necesita)
+    import shutil
+    ffmpeg_bin = shutil.which("ffmpeg")
+    if not ffmpeg_bin:
+        # Intento alternativo: rutas comunes en Streamlit Cloud / Linux
+        for candidate in ["/usr/bin/ffmpeg", "/usr/local/bin/ffmpeg"]:
+            if os.path.isfile(candidate):
+                ffmpeg_bin = candidate
+                # Añadir al PATH para que pydub lo encuentre automáticamente
+                os.environ["PATH"] = os.path.dirname(candidate) + os.pathsep + os.environ.get("PATH", "")
+                break
+
+    if not ffmpeg_bin:
+        st.session_state.pydub_available = False
+        return False, "ffmpeg no está en PATH"
+
+    # 3. Prueba funcional mínima: decodificar 1 segundo de silencio
+    try:
+        from pydub import AudioSegment
+        silence = AudioSegment.silent(duration=100)   # 100 ms, no toca disco
+        _ = len(silence)
+    except Exception as e:
+        st.session_state.pydub_available = False
+        return False, f"pydub falló en prueba funcional: {e}"
+
+    st.session_state.pydub_available = True
+    return True, ""
 
 
 # --- UTILIDADES ---
@@ -306,6 +440,21 @@ def count_occurrences(text, query):
     return count
 
 
+def find_segment_at_time(segments, current_time_sec):
+    """Devuelve el índice del segmento correspondiente a un tiempo dado."""
+    if not segments:
+        return -1
+    best = -1
+    for i, seg in enumerate(segments):
+        s = float(seg.get("start", 0))
+        e = float(seg.get("end", 0))
+        if s <= current_time_sec <= e:
+            return i
+        if s <= current_time_sec:
+            best = i
+    return best
+
+
 # --- AUTH ---
 def check_password():
     if st.session_state.authenticated:
@@ -370,27 +519,23 @@ def save_uploaded(f):
     except Exception:
         return None
 
+
 def get_audio_info(path):
-    """Obtiene duración y objeto audio con pydub."""
-    try:
-        from pydub import AudioSegment
-    except ImportError:
-        st.warning("⚠️ pydub no está instalado. Verifica requirements.txt")
+    """
+    Obtiene duración y objeto AudioSegment.
+    Usa check_pydub_ffmpeg() para diagnóstico limpio.
+    """
+    ok, msg = check_pydub_ffmpeg()
+    if not ok:
         return None, None
 
     try:
-        # Verificar que ffmpeg está disponible
-        import shutil
-        ffmpeg_path = shutil.which("ffmpeg")
-        if not ffmpeg_path:
-            st.warning("⚠️ ffmpeg no encontrado. Verifica packages.txt")
-            return None, None
-
+        from pydub import AudioSegment
         audio = AudioSegment.from_file(path)
         return len(audio), audio
-
     except Exception as e:
-        st.warning(f"⚠️ Error al analizar audio: {e}")
+        # Error específico de este archivo, no de la instalación
+        st.warning(f"⚠️ No se pudo analizar el audio: {e}")
         return None, None
 
 
@@ -435,7 +580,7 @@ def split_audio_chunks(audio_segment, chunk_duration_ms=600_000, overlap_ms=15_0
 
 
 def transcribe_single(client, path, model, max_retries=3):
-    """Transcribe un archivo con reintentos y backoff."""
+    """Transcribe un archivo con reintentos y backoff exponencial."""
     for attempt in range(max_retries):
         try:
             with open(path, "rb") as f:
@@ -467,11 +612,15 @@ def transcribe_single(client, path, model, max_retries=3):
             return t.text or "", segments, None
 
         except Exception as e:
+            err_str = str(e)
+            # No reintentar en errores de autenticación o límite de tamaño
+            if any(kw in err_str.lower() for kw in ["invalid_api_key", "413", "too large"]):
+                return None, None, err_str
             if attempt < max_retries - 1:
-                wait = (attempt + 1) * 2
+                wait = 2 ** attempt          # backoff exponencial: 1s, 2s, 4s
                 time.sleep(wait)
             else:
-                return None, None, str(e)
+                return None, None, err_str
 
     return None, None, "Max retries exceeded"
 
@@ -572,12 +721,12 @@ def calculate_coverage(segments, total_duration_sec):
         return 0.0
 
     intervals = sorted([(seg["start"], seg["end"]) for seg in segments])
-    merged = [intervals[0]]
+    merged = [list(intervals[0])]
     for start, end in intervals[1:]:
         if start <= merged[-1][1]:
-            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+            merged[-1][1] = max(merged[-1][1], end)
         else:
-            merged.append((start, end))
+            merged.append([start, end])
 
     covered = sum(end - start for start, end in merged)
     return min(100.0, (covered / total_duration_sec) * 100)
@@ -623,7 +772,7 @@ def retranscribe_gaps(client, audio_segment, gaps, model, status_writer=None):
 def transcribe_complete(client, path, model, progress_status=None):
     """
     Pipeline completo:
-    1. Analizar audio con pydub
+    1. Analizar audio con pydub (con diagnóstico limpio)
     2. Dividir en chunks si es largo
     3. Transcribir cada chunk con reintentos
     4. Fusionar eliminando duplicados
@@ -635,14 +784,30 @@ def transcribe_complete(client, path, model, progress_status=None):
 
     duration_ms, audio_segment = get_audio_info(path)
 
-    # FALLBACK: si pydub no está disponible, transcripción directa
+    # -------------------------------------------------------
+    # FALLBACK: pydub/ffmpeg no disponible → transcripción directa
+    # -------------------------------------------------------
     if duration_ms is None or audio_segment is None:
         if progress_status:
-            progress_status.write("🎧 Transcribiendo (modo directo)...")
+            progress_status.write(
+                "ℹ️ Modo de transcripción directa (pydub/ffmpeg no disponible). "
+                "Archivos > 25 MB pueden fallar."
+            )
+
+        # Verificar tamaño antes de enviar
+        file_size_mb = os.path.getsize(path) / (1024 * 1024)
+        if file_size_mb > 24:
+            if progress_status:
+                progress_status.write(
+                    f"⚠️ Archivo de {file_size_mb:.1f} MB supera el límite de 25 MB de la API. "
+                    "Instala ffmpeg para habilitar la segmentación automática."
+                )
+
+        if progress_status:
+            progress_status.write("🎧 Transcribiendo...")
 
         text, segments, error = transcribe_single(client, path, model)
         if error:
-            st.error(f"Error de transcripción: {error}")
             return None, None, 0, 0, [], 1
 
         if not segments:
@@ -652,12 +817,13 @@ def transcribe_complete(client, path, model, progress_status=None):
         coverage = calculate_coverage(segments, duration_sec)
         return text, segments, int(duration_sec * 1000), coverage, [], 1
 
-    # CON PYDUB: pipeline completo
+    # -------------------------------------------------------
+    # CON PYDUB: pipeline completo con segmentación
+    # -------------------------------------------------------
     duration_sec = duration_ms / 1000.0
     if progress_status:
         progress_status.write(f"⏱️ Duración: {fmt_duration(duration_sec)}")
 
-    # Dividir en chunks
     chunks = split_audio_chunks(audio_segment, chunk_duration_ms=600_000, overlap_ms=15_000)
     n_chunks = len(chunks)
 
@@ -667,8 +833,8 @@ def transcribe_complete(client, path, model, progress_status=None):
         else:
             progress_status.write("📦 Audio en una sola parte")
 
-    # Transcribir cada chunk
     all_results = []
+    failed_chunks = []
 
     for ci, chunk in enumerate(chunks):
         if progress_status:
@@ -682,6 +848,7 @@ def transcribe_complete(client, path, model, progress_status=None):
         if error:
             if progress_status:
                 progress_status.write(f"⚠️ Error en parte {ci+1}: {error}")
+            failed_chunks.append(ci + 1)
         elif segments:
             all_results.append({
                 "text": text,
@@ -699,13 +866,11 @@ def transcribe_complete(client, path, model, progress_status=None):
     if not all_results:
         return None, None, duration_ms, 0, [], n_chunks
 
-    # Fusionar
     if progress_status:
         progress_status.write("🔗 Fusionando resultados...")
 
     merged_segments, full_text = merge_chunk_segments(all_results, overlap_ms=15_000)
 
-    # Verificar cobertura
     coverage = calculate_coverage(merged_segments, duration_sec)
     gaps = find_coverage_gaps(merged_segments, duration_sec, gap_threshold=5.0)
 
@@ -918,7 +1083,7 @@ def execute_search():
 
 def reset_all():
     for k, v in DEFAULTS.items():
-        if k != "authenticated":
+        if k not in ("authenticated", "pydub_available"):
             st.session_state[k] = v
 
 
@@ -1015,6 +1180,49 @@ def generate_sentiment(client, text):
     return result
 
 
+# ============================================================
+# VISOR DE SEGMENTOS SINCRONIZADO (alternativa a resaltado live)
+# ============================================================
+
+def render_segment_viewer(segments, active_idx=-1, search_query=""):
+    """
+    Renderiza el visor de segmentos con el segmento activo resaltado.
+    Cada segmento es clickeable para saltar a ese punto en el audio.
+    
+    Limitación de Streamlit:
+    - No podemos detectar el tiempo del reproductor en tiempo real.
+    - El usuario puede hacer clic en el timestamp de cualquier segmento 
+      para ir a ese punto Y ver qué segmento está activo.
+    - El segmento activo se mantiene en session_state y se actualiza 
+      cuando el usuario hace clic en ▶ desde los resultados de búsqueda.
+    """
+    if not segments:
+        return
+
+    rows_html = []
+    for i, seg in enumerate(segments):
+        is_active = (i == active_idx)
+        ts = fmt_time(float(seg.get("start", 0)))
+        text = seg.get("text", "").strip()
+        recovered_mark = " 🔄" if seg.get("recovered") else ""
+
+        if search_query:
+            text = highlight_html(text, search_query)
+
+        active_class = "active" if is_active else ""
+
+        rows_html.append(
+            f"<div class='seg-row {active_class}' "
+            f"data-start='{seg.get('start', 0)}'>"
+            f"<span class='seg-ts'>{ts}</span>"
+            f"<span class='seg-txt'>{text}{recovered_mark}</span>"
+            f"</div>"
+        )
+
+    viewer_html = f"<div class='seg-viewer'>{''.join(rows_html)}</div>"
+    st.markdown(viewer_html, unsafe_allow_html=True)
+
+
 # --- PROCESO PRINCIPAL ---
 def process_audio(client, uploaded, model, do_correct):
     reset_all()
@@ -1078,6 +1286,9 @@ def main_app():
     if not client:
         st.stop()
 
+    # Diagnóstico de pydub/ffmpeg al inicio (una sola vez, silencioso)
+    pydub_ok, pydub_msg = check_pydub_ffmpeg()
+
     with st.sidebar:
         st.markdown("#### ⚙️ Configuración")
         model = st.selectbox("Modelo Whisper", ["whisper-large-v3", "whisper-large-v3-turbo"],
@@ -1088,6 +1299,26 @@ def main_app():
         ctx_w = st.slider("Palabras contexto", 10, 60, 30, step=5)
         use_fuzzy = st.toggle("Aproximada (fuzzy)", value=True)
         fuzzy_t = st.slider("Sensibilidad", 0.5, 1.0, 0.75, 0.05) if use_fuzzy else 1.0
+        st.markdown("---")
+
+        # Estado de dependencias en sidebar
+        if pydub_ok:
+            st.markdown(
+                "<div style='font-size:0.72rem;color:#059669;background:#ecfdf5;"
+                "padding:6px 10px;border-radius:6px;border:1px solid #a7f3d0'>"
+                "✅ pydub + ffmpeg OK<br>"
+                "<span style='color:#78716c'>Segmentación habilitada</span></div>",
+                unsafe_allow_html=True
+            )
+        else:
+            st.markdown(
+                "<div style='font-size:0.72rem;color:#d97706;background:#fffbeb;"
+                "padding:6px 10px;border-radius:6px;border:1px solid #fcd34d'>"
+                f"⚠️ Modo básico<br>"
+                f"<span style='color:#78716c'>{pydub_msg or 'Sin segmentación'}</span></div>",
+                unsafe_allow_html=True
+            )
+
         st.markdown("---")
         if st.button("🚪 Cerrar sesión", use_container_width=True):
             for k in list(st.session_state.keys()):
@@ -1116,6 +1347,14 @@ def main_app():
                 <div class="empty-state-text">MP3, WAV, M4A, OGG o MP4 — Sin límite de duración</div>
             </div>
             """, unsafe_allow_html=True)
+
+            if not pydub_ok:
+                st.info(
+                    "ℹ️ **Modo básico activo**: archivos mayores a ~24 MB pueden fallar. "
+                    "Para habilitar segmentación automática, verifica que `ffmpeg` y `pydub` "
+                    "estén correctamente instalados.",
+                    icon=None
+                )
 
             uploaded = st.file_uploader(
                 "x", type=["mp3", "wav", "m4a", "ogg", "mp4"],
@@ -1230,6 +1469,8 @@ def main_app():
                 with rc1:
                     if st.button(f"▶ {time_display}", key=f"p_{i}_{r.get('idx', i)}"):
                         st.session_state.audio_start_time = max(0, r.get("start_time", 0) - 2)
+                        # Actualizar segmento activo en el visor
+                        st.session_state.active_segment_idx = r.get("idx", -1)
                         st.rerun()
                 with rc2:
                     st.markdown(f"""
@@ -1250,19 +1491,70 @@ def main_app():
             </div>
             """, unsafe_allow_html=True)
 
-        # Texto completo SIEMPRE visible
+        # Texto completo / Visor de segmentos
         st.markdown("---")
-        st.markdown("##### 📄 Texto completo")
 
-        if aq:
-            total_in_text = count_occurrences(txt, aq)
-            if total_in_text > 0:
-                st.caption(f"🔶 {total_in_text} ocurrencia{'s' if total_in_text != 1 else ''} resaltada{'s' if total_in_text != 1 else ''}")
-            hl_text = highlight_full_text(txt, aq)
+        # Toggle entre vista de texto plano y visor de segmentos
+        view_mode = st.radio(
+            "Vista",
+            ["📄 Texto completo", "🎬 Visor de segmentos"],
+            horizontal=True,
+            label_visibility="collapsed",
+        )
+
+        if view_mode == "📄 Texto completo":
+            st.markdown("##### 📄 Texto completo")
+            if aq:
+                total_in_text = count_occurrences(txt, aq)
+                if total_in_text > 0:
+                    st.caption(f"🔶 {total_in_text} ocurrencia{'s' if total_in_text != 1 else ''} resaltada{'s' if total_in_text != 1 else ''}")
+                hl_text = highlight_full_text(txt, aq)
+            else:
+                hl_text = txt
+            st.markdown(f"<div class='full-text-box'>{hl_text}</div>", unsafe_allow_html=True)
+
         else:
-            hl_text = txt
+            # -------------------------------------------------------
+            # VISOR DE SEGMENTOS
+            # Muestra cada segmento con su timestamp. Al hacer clic en
+            # ▶ desde resultados de búsqueda, el segmento activo se
+            # resalta aquí. El usuario puede navegar por segmentos
+            # haciendo clic en los botones de tiempo en los resultados.
+            # -------------------------------------------------------
+            st.markdown("##### 🎬 Visor de segmentos")
 
-        st.markdown(f"<div class='full-text-box'>{hl_text}</div>", unsafe_allow_html=True)
+            active_idx = st.session_state.active_segment_idx
+
+            if active_idx >= 0 and active_idx < len(segs):
+                active_seg = segs[active_idx]
+                st.caption(
+                    f"▶ Segmento activo: **{fmt_time(active_seg.get('start', 0))}** — "
+                    f"_{active_seg.get('text', '')[:80]}{'...' if len(active_seg.get('text','')) > 80 else ''}_"
+                )
+
+            # Nota informativa sobre la limitación de Streamlit
+            st.caption(
+                "💡 Haz clic en **▶ timestamp** en los resultados de búsqueda para "
+                "saltar al segmento y verlo resaltado aquí."
+            )
+
+            render_segment_viewer(segs, active_idx=active_idx, search_query=aq)
+
+            # Botones de navegación rápida entre segmentos
+            if segs and active_idx >= 0:
+                nav1, nav2, nav3 = st.columns([1, 1, 4])
+                with nav1:
+                    if st.button("⏮ Anterior", disabled=(active_idx <= 0)):
+                        new_idx = max(0, active_idx - 1)
+                        st.session_state.active_segment_idx = new_idx
+                        st.session_state.audio_start_time = float(segs[new_idx].get("start", 0))
+                        st.rerun()
+                with nav2:
+                    if st.button("⏭ Siguiente", disabled=(active_idx >= len(segs) - 1)):
+                        new_idx = min(len(segs) - 1, active_idx + 1)
+                        st.session_state.active_segment_idx = new_idx
+                        st.session_state.audio_start_time = float(segs[new_idx].get("start", 0))
+                        st.rerun()
 
         # Huecos
         if gaps:
@@ -1270,10 +1562,17 @@ def main_app():
             with st.expander(f"⚠️ {len(gaps)} hueco{'s' if len(gaps) != 1 else ''} detectado{'s' if len(gaps) != 1 else ''}", expanded=False):
                 st.caption("Secciones sin habla detectada (silencio, música o ruido)")
                 for gap in gaps:
-                    st.markdown(
-                        f"`{fmt_time(gap['start'])}` → `{fmt_time(gap['end'])}` — "
-                        f"**{gap['duration']:.1f}s**"
-                    )
+                    gc1, gc2 = st.columns([3, 1])
+                    with gc1:
+                        st.markdown(
+                            f"`{fmt_time(gap['start'])}` → `{fmt_time(gap['end'])}` — "
+                            f"**{gap['duration']:.1f}s**"
+                        )
+                    with gc2:
+                        # Botón para ir al punto del hueco en el audio
+                        if st.button(f"▶ ir", key=f"gap_go_{gap['start']:.0f}"):
+                            st.session_state.audio_start_time = max(0, gap["start"] - 1)
+                            st.rerun()
 
         # Nuevo archivo
         st.markdown("---")
