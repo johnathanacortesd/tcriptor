@@ -370,18 +370,27 @@ def save_uploaded(f):
     except Exception:
         return None
 
-
 def get_audio_info(path):
-    """Obtiene duración y objeto audio con pydub. Retorna (duration_ms, audio_segment) o (None, None)."""
+    """Obtiene duración y objeto audio con pydub."""
     try:
         from pydub import AudioSegment
+    except ImportError:
+        st.warning("⚠️ pydub no está instalado. Verifica requirements.txt")
+        return None, None
+
+    try:
+        # Verificar que ffmpeg está disponible
+        import shutil
+        ffmpeg_path = shutil.which("ffmpeg")
+        if not ffmpeg_path:
+            st.warning("⚠️ ffmpeg no encontrado. Verifica packages.txt")
+            return None, None
+
         audio = AudioSegment.from_file(path)
         return len(audio), audio
-    except ImportError:
-        st.warning("⚠️ pydub no instalado. Agrega 'pydub' a requirements.txt y 'ffmpeg' a packages.txt")
-        return None, None
+
     except Exception as e:
-        st.warning(f"⚠️ No se pudo analizar el audio con pydub: {e}")
+        st.warning(f"⚠️ Error al analizar audio: {e}")
         return None, None
 
 
