@@ -437,9 +437,8 @@ GLOBAL_DEFAULTS = {
     "_search_pending": False,
     "_global_search_pending": False,
     # Contador que se incrementa en cada salto de timestamp.
-    # Se usa como parte del KEY de st.audio para forzar
-    # la recreación completa del widget.
-    "_jump_counter": 0,
+    # Se usa como parte del key de st.audio para forzar recreación del widget.
+    "_audio_widget_key": 0,
 }
 
 for k, v in {**AUDIO_DEFAULTS, **GLOBAL_DEFAULTS}.items():
@@ -613,15 +612,24 @@ def build_timestamped_transcript(segments):
     return "\n".join(lines)
 
 
+def get_audio_key():
+    """
+    Genera un key único para el widget st.audio.
+    Cada vez que se llama a jump_to_time(), _audio_widget_key se incrementa,
+    lo que genera un key diferente y FUERZA a Streamlit a destruir y recrear
+    el widget de audio, aplicando el nuevo start_time.
+    """
+    return f"audio_player_{st.session_state.get('_audio_widget_key', 0)}"
+
+
 def jump_to_time(seconds, segment_idx=-1):
     """
     Salta el reproductor a un tiempo específico.
-    Incrementa _jump_counter para que el KEY de st.audio cambie,
-    forzando a Streamlit a destruir y recrear el widget completo.
-    Esto garantiza que el reproductor SIEMPRE salte al tiempo indicado,
-    incluso si se hace clic en el mismo timestamp varias veces.
+    Incrementa _audio_widget_key para que el key del widget st.audio
+    sea SIEMPRE diferente, forzando la destrucción y recreación del
+    reproductor con el nuevo start_time.
     """
-    st.session_state._jump_counter = st.session_state.get("_jump_counter", 0) + 1
+    st.session_state._audio_widget_key = st.session_state.get("_audio_widget_key", 0) + 1
     st.session_state.audio_start_time = max(0, int(seconds))
     if segment_idx >= 0:
         st.session_state.active_segment_idx = segment_idx
@@ -1561,6 +1569,7 @@ def process_audio(client, uploaded, model, do_correct, custom_vocab=""):
             st.session_state.correction_applied = False
 
         st.session_state.audio_start_time = 0
+        st.session_state._audio_widget_key = 0
         wc = len(full_text.split())
         cov_icon = "✅" if coverage >= 95 else "⚠️" if coverage >= 80 else "❌"
         chunk_info = f" · {chunks_used} partes" if chunks_used > 1 else ""
@@ -1788,6 +1797,29 @@ STOPWORDS_ES = {
 
 
 # ============================================================
+# FUNCIÓN HELPER: renderizar st.audio con key dinámico
+# ============================================================
+
+def render_audio_player(audio_path, context_suffix=""):
+    """
+    Renderiza el reproductor de audio con un key dinámico basado en
+    _audio_widget_key. Cada vez que jump_to_time() incrementa el counter,
+    el key cambia y Streamlit DESTRUYE y RECREA el widget, forzando
+    que start_time se aplique correctamente.
+    
+    context_suffix: sufijo para diferenciar reproductores en distintos tabs
+    """
+    if not audio_path:
+        return
+    widget_key = f"audio_player_{st.session_state.get('_audio_widget_key', 0)}_{context_suffix}"
+    st.audio(
+        audio_path,
+        start_time=st.session_state.audio_start_time,
+        key=widget_key
+    )
+
+
+# ============================================================
 # APP PRINCIPAL
 # ============================================================
 
@@ -1953,15 +1985,6 @@ def main_app():
         "🔍 Búsqueda", "✍️ Redacción", "🌐 Global", "💬 Chat IA", "📊 Análisis", "📥 Exportar"
     ])
 
-    # ═══════════════════════════════════════════════════════
-    # CLAVE DE LA CORRECCIÓN:
-    # Usamos _jump_counter como parte del KEY de st.audio.
-    # Al cambiar el key, Streamlit destruye y recrea el widget,
-    # forzando que el reproductor arranque en el start_time indicado.
-    # ═══════════════════════════════════════════════════════
-    audio_widget_key = f"audio_player_{st.session_state._jump_counter}"
-    audio_start = st.session_state.audio_start_time
-
     # ════════════════════════════════════════════════════
     # TAB: REDACCIÓN
     # ════════════════════════════════════════════════════
@@ -2001,11 +2024,7 @@ def main_app():
         with panel_audio:
             st.markdown("<div class='panel-header'>🎵 Reproductor</div>", unsafe_allow_html=True)
             if st.session_state.audio_path:
-                st.audio(
-                    st.session_state.audio_path,
-                    start_time=audio_start,
-                    key=f"audio_redaccion_{st.session_state._jump_counter}"
-                )
+                render_audio_player(st.session_state.audio_path, context_suffix="redaccion")
 
             st.markdown("<div class='panel-header' style='margin-top:10px'>📌 Marcadores</div>",
                         unsafe_allow_html=True)
@@ -2078,11 +2097,7 @@ def main_app():
                 st.session_state._search_pending = True
 
         if st.session_state.audio_path:
-            st.audio(
-                st.session_state.audio_path,
-                start_time=audio_start,
-                key=f"audio_busqueda_{st.session_state._jump_counter}"
-            )
+            render_audio_player(st.session_state.audio_path, context_suffix="busqueda")
 
         sq1, sq2 = st.columns([5, 0.7])
         with sq1:
