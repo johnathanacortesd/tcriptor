@@ -383,6 +383,12 @@ st.markdown("""
         background: var(--primary-subtle); border-color: var(--primary); transform: scale(1.02);
     }
     .ts-jump-btn:active { transform: scale(0.98); }
+
+    .ent-error-box {
+        background: var(--red-bg); border: 1px solid #fca5a5;
+        border-radius: var(--radius-sm); padding: 10px 14px;
+        font-size: 0.8rem; color: var(--red); margin-top: 8px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -954,10 +960,93 @@ def global_search(query, audio_history, fuzzy_thresh=0.75):
 
 
 # ============================================================
-# IA: ENTIDADES
+# IA: ENTIDADES — VERSIÓN ROBUSTA
 # ============================================================
+
+def _parse_entities_json(raw_content):
+    """
+    Intenta extraer un JSON válido de entidades desde la respuesta del modelo.
+    Maneja múltiples formatos de respuesta y casos de error.
+    Retorna un dict con las 5 claves esperadas, o None si no se puede parsear.
+    """
+    if not raw_content or not isinstance(raw_content, str):
+        return None
+
+    text = raw_content.strip()
+
+    # 1) Remover bloques de código markdown: ```json ... ``` o ``` ... ```
+    text = re.sub(r"```(?:json)?\s*", "", text)
+    text = re.sub(r"```\s*", "", text)
+    text = text.strip()
+
+    # 2) Intentar parsear directamente
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            return parsed
+    except json.JSONDecodeError:
+        pass
+
+    # 3) Buscar el primer bloque { ... } en el texto (por si hay prefijos/sufijos)
+    brace_match = re.search(r'\{[\s\S]*\}', text)
+    if brace_match:
+        try:
+            parsed = json.loads(brace_match.group())
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError:
+            pass
+
+    # 4) Intentar reparar JSON con comillas simples → dobles
+    try:
+        fixed = text.replace("'", '"')
+        parsed = json.loads(fixed)
+        if isinstance(parsed, dict):
+            return parsed
+    except json.JSONDecodeError:
+        pass
+
+    # 5) Extracción manual con regex como último recurso
+    #    Busca patrones: "clave": ["val1", "val2", ...]
+    result = {}
+    list_pattern = re.compile(
+        r'"?(personas|organizaciones|lugares|fechas|otros)"?\s*:\s*\[([^\]]*)\]',
+        re.IGNORECASE | re.DOTALL
+    )
+    for match in list_pattern.finditer(text):
+        key = match.group(1).lower()
+        items_raw = match.group(2)
+        # Extraer strings entre comillas
+        items = re.findall(r'"([^"]+)"', items_raw)
+        if not items:
+            # Intentar sin comillas (elementos separados por coma)
+            items = [i.strip().strip("'") for i in items_raw.split(",") if i.strip().strip("'")]
+        result[key] = items
+
+    if result:
+        return result
+
+    return None
+
+
 def extract_entities(client, text):
-    if st.session_state.entities is not None: return st.session_state.entities
+    """
+    Extrae entidades nombradas del texto usando la API de Groq.
+    Versión robusta con múltiples estrategias de fallback.
+    """
+    # Verificar caché
+    if st.session_state.entities is not None:
+        return st.session_state.entities
+
+    # Validar que text sea un string real
+    if not isinstance(text, str) or not text.strip():
+        fallback = {k: [] for k in ["personas", "organizaciones", "lugares", "fechas", "otros"]}
+        st.session_state.entities = fallback
+        return fallback
+
+    # Truncar texto si es muy largo
+    text_to_analyze = text[:8000] if len(text) > 8000 else text
+
     system = """Eres un extractor de entidades nombradas para periodismo.
 Analiza el texto y extrae:
 - PERSONAS: nombres de personas mencionadas
@@ -966,7 +1055,8 @@ Analiza el texto y extrae:
 - FECHAS: fechas, períodos, referencias temporales
 - OTROS: conceptos clave relevantes para la noticia
 
-Responde ÚNICAMENTE en JSON con este formato exacto:
+IMPORTANTE: Responde ÚNICAMENTE con un objeto JSON válido, sin texto adicional antes ni después.
+El formato debe ser exactamente:
 {
   "personas": ["nombre1", "nombre2"],
   "organizaciones": ["org1", "org2"],
@@ -974,18 +1064,52 @@ Responde ÚNICAMENTE en JSON con este formato exacto:
   "fechas": ["fecha1", "fecha2"],
   "otros": ["concepto1", "concepto2"]
 }
-No incluyas texto antes ni después del JSON."""
-    try:
-        r = client.chat.completions.create(model="llama-3.3-70b-versatile",
-            messages=[{"role": "system", "content": system}, {"role": "user", "content": text[:8000]}],
-            temperature=0.0, max_tokens=800)
-        raw = re.sub(r"```json\s*|\s*```", "", r.choices[0].message.content.strip()).strip()
-        entities = json.loads(raw)
-        result = {k: entities.get(k, []) for k in ["personas", "organizaciones", "lugares", "fechas", "otros"]}
-        st.session_state.entities = result; return result
-    except:
-        fallback = {k: [] for k in ["personas", "organizaciones", "lugares", "fechas", "otros"]}
-        st.session_state.entities = fallback; return fallback
+No incluyas explicaciones, comentarios ni bloques de código markdown."""
+
+    last_error = None
+
+    # Intentar hasta 3 veces con temperatura progresivamente mayor
+    for attempt in range(3):
+        try:
+            temp = 0.0 if attempt == 0 else (0.1 if attempt == 1 else 0.2)
+            r = client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": f"Extrae las entidades de este texto:\n\n{text_to_analyze}"}
+                ],
+                temperature=temp,
+                max_tokens=1000
+            )
+
+            raw_content = r.choices[0].message.content
+            parsed = _parse_entities_json(raw_content)
+
+            if parsed is not None:
+                # Normalizar claves y asegurar que sean listas de strings
+                result = {}
+                for key in ["personas", "organizaciones", "lugares", "fechas", "otros"]:
+                    val = parsed.get(key, [])
+                    if isinstance(val, list):
+                        result[key] = [str(item).strip() for item in val if item and str(item).strip()]
+                    else:
+                        result[key] = []
+                st.session_state.entities = result
+                return result
+
+            last_error = f"No se pudo parsear el JSON en intento {attempt + 1}"
+
+        except Exception as e:
+            last_error = str(e)
+            if attempt < 2:
+                time.sleep(1)
+
+    # Si todos los intentos fallaron, guardar el error para mostrarlo
+    st.session_state._entities_error = last_error
+    fallback = {k: [] for k in ["personas", "organizaciones", "lugares", "fechas", "otros"]}
+    st.session_state.entities = fallback
+    return fallback
+
 
 def highlight_entities_in_text(text, entities):
     if not entities or not text: return text
@@ -1002,19 +1126,30 @@ def highlight_entities_in_text(text, entities):
 
 def render_entity_panel(entities):
     if not entities: return
-    cats = [("personas", "ent-person", "👤 Personas"), ("organizaciones", "ent-org", "🏛️ Organizaciones"),
-            ("lugares", "ent-place", "📍 Lugares"), ("fechas", "ent-date", "📅 Fechas"), ("otros", "ent-other", "🏷️ Conceptos clave")]
+    cats = [
+        ("personas", "ent-person", "👤 Personas"),
+        ("organizaciones", "ent-org", "🏛️ Organizaciones"),
+        ("lugares", "ent-place", "📍 Lugares"),
+        ("fechas", "ent-date", "📅 Fechas"),
+        ("otros", "ent-other", "🏷️ Conceptos clave")
+    ]
     html_parts = []
+    has_any = False
     for key, cls, label in cats:
         items = entities.get(key, [])
         if items:
+            has_any = True
             tags = " ".join(f"<span class='{cls}'>{e}</span>" for e in items)
             html_parts.append(
                 f"<div style='margin-bottom:12px'>"
                 f"<div style='font-size:0.7rem;font-weight:700;text-transform:uppercase;"
                 f"letter-spacing:0.05em;color:var(--text-muted);margin-bottom:6px'>{label}</div>"
-                f"<div style='display:flex;flex-wrap:wrap;gap:6px'>{tags}</div></div>")
-    st.markdown("".join(html_parts), unsafe_allow_html=True) if html_parts else st.caption("No se detectaron entidades.")
+                f"<div style='display:flex;flex-wrap:wrap;gap:6px'>{tags}</div></div>"
+            )
+    if html_parts:
+        st.markdown("".join(html_parts), unsafe_allow_html=True)
+    elif not has_any:
+        st.caption("No se detectaron entidades en el texto.")
 
 
 # ============================================================
@@ -1022,6 +1157,12 @@ def render_entity_panel(entities):
 # ============================================================
 def generate_lead(client, text, filename=""):
     if st.session_state.lead_cache is not None: return st.session_state.lead_cache
+
+    if not isinstance(text, str) or not text.strip():
+        fallback = {"titular": "Sin texto", "subtitulo": "", "lead": "No hay texto para analizar.", "contexto": ""}
+        st.session_state.lead_cache = fallback
+        return fallback
+
     system = """Eres un periodista experto en redacción noticiosa.
 Con base en la siguiente transcripción de audio, redacta:
 1. Un TITULAR periodístico impactante y preciso (máximo 12 palabras)
@@ -1029,23 +1170,45 @@ Con base en la siguiente transcripción de audio, redacta:
 3. Un LEAD noticioso que responda Qué, Quién, Cuándo, Dónde, Por qué (2-3 oraciones, máximo 60 palabras)
 4. Un CONTEXTO breve con los antecedentes más relevantes (máximo 3 oraciones)
 
-Responde ÚNICAMENTE en JSON con este formato exacto:
+Responde ÚNICAMENTE con un objeto JSON válido, sin texto adicional:
 {
   "titular": "...",
   "subtitulo": "...",
   "lead": "...",
   "contexto": "..."
-}
-No incluyas texto antes ni después del JSON."""
+}"""
     try:
-        r = client.chat.completions.create(model="llama-3.3-70b-versatile",
-            messages=[{"role": "system", "content": system}, {"role": "user", "content": text[:10000]}],
-            temperature=0.2, max_tokens=600)
-        raw = re.sub(r"```json\s*|\s*```", "", r.choices[0].message.content.strip()).strip()
-        result = json.loads(raw); st.session_state.lead_cache = result; return result
+        r = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": text[:10000]}
+            ],
+            temperature=0.2, max_tokens=600
+        )
+        raw = r.choices[0].message.content.strip()
+        # Limpiar markdown fences
+        raw = re.sub(r"```(?:json)?\s*", "", raw)
+        raw = re.sub(r"```\s*", "", raw).strip()
+
+        # Buscar JSON
+        brace_match = re.search(r'\{[\s\S]*\}', raw)
+        if brace_match:
+            result = json.loads(brace_match.group())
+        else:
+            result = json.loads(raw)
+
+        st.session_state.lead_cache = result
+        return result
     except Exception as e:
-        fallback = {"titular": "No se pudo generar", "subtitulo": "", "lead": f"Error: {str(e)[:100]}", "contexto": ""}
-        st.session_state.lead_cache = fallback; return fallback
+        fallback = {
+            "titular": "No se pudo generar",
+            "subtitulo": "",
+            "lead": f"Error al generar el lead: {str(e)[:100]}",
+            "contexto": ""
+        }
+        st.session_state.lead_cache = fallback
+        return fallback
 
 
 # ============================================================
@@ -1279,6 +1442,12 @@ def main_app():
     # CON TRANSCRIPCIÓN
     # ══════════════════════════════════════════════
     txt = st.session_state.transcript_text
+
+    # Garantizar que txt sea siempre un string
+    if not isinstance(txt, str):
+        txt = str(txt) if txt is not None else ""
+        st.session_state.transcript_text = txt
+
     segs = st.session_state.corrected_segments or []
     n_words = len(txt.split())
     duration = get_audio_duration(segs)
@@ -1399,10 +1568,14 @@ def main_app():
             btn_col1, btn_col2 = st.columns(2)
             with btn_col1:
                 if st.button("🏷️ Extraer Entidades", type="primary", use_container_width=True):
+                    # Limpiar caché y errores previos
                     st.session_state.entities = None
+                    st.session_state._entities_error = None
+                    # Usar txt (ya garantizado como string)
                     with st.spinner("Extrayendo entidades..."):
-                        _ = extract_entities(client, txt)
+                        extracted = extract_entities(client, txt)
                     st.rerun()
+
             with btn_col2:
                 if st.button("📰 Generar Lead", use_container_width=True):
                     st.session_state.lead_cache = None
@@ -1410,9 +1583,30 @@ def main_app():
                         _ = generate_lead(client, txt, fname_display)
                     st.rerun()
 
+            # Mostrar error si hubo problema con entidades
+            if st.session_state.get("_entities_error") and st.session_state.entities is not None:
+                all_empty = all(
+                    len(v) == 0
+                    for v in st.session_state.entities.values()
+                    if isinstance(v, list)
+                )
+                if all_empty:
+                    st.markdown(
+                        f"<div class='ent-error-box'>⚠️ No se pudieron extraer entidades. "
+                        f"Intenta de nuevo.<br><small>{st.session_state._entities_error}</small></div>",
+                        unsafe_allow_html=True
+                    )
+
             if st.session_state.entities is not None:
-                st.markdown("---")
-                render_entity_panel(st.session_state.entities)
+                # Solo mostrar panel si hay alguna entidad
+                all_empty = all(
+                    len(v) == 0
+                    for v in st.session_state.entities.values()
+                    if isinstance(v, list)
+                )
+                if not all_empty:
+                    st.markdown("---")
+                    render_entity_panel(st.session_state.entities)
 
             if st.session_state.lead_cache:
                 st.markdown("---")
