@@ -63,8 +63,19 @@ st.markdown("""
     #MainMenu, footer, header { visibility: hidden; }
     .stDeployButton { display: none; }
 
-    * { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important; }
-    code, .mono { font-family: 'JetBrains Mono', monospace !important; }
+    /* Fuente aplicada a contenido, NO con wildcard (*) que rompe
+       el layout interno de st.status, st.chat_message, st.file_uploader
+       cuyos labels usan posicionamiento absoluto/relativo */
+    body, p, div, h1, h2, h3, h4, h5, h6, li, td, th,
+    .stMarkdown, .stText, [data-testid="stMarkdownContainer"],
+    [data-testid="stCaptionContainer"], [data-testid="stText"],
+    .stButton > button, .stSelectbox, .stTextInput input,
+    .stRadio label, .stCheckbox label, .stSlider {
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important;
+    }
+    code, pre, .mono, [data-testid="stCode"] {
+        font-family: 'JetBrains Mono', monospace !important;
+    }
 
     .main .block-container {
         padding: 0.3rem 1.5rem 1rem 1.5rem;
@@ -412,11 +423,15 @@ GLOBAL_DEFAULTS = {
     "last_search_query": "",
     "global_search_results": None,
     "last_global_query": "",
-    # historial: lista de dicts con snapshot de AUDIO_DEFAULTS + id
-    "audio_history": [],      # máx 6 entradas
-    "active_audio_id": None,  # id del audio activo
+    "audio_history": [],
+    "active_audio_id": None,
     "_search_pending": False,
     "_global_search_pending": False,
+    # Contador de saltos — se incrementa cada vez que el usuario hace clic
+    # en un timestamp. st.audio solo salta cuando start_time CAMBIA,
+    # así que guardamos (tiempo, contador) y pasamos tiempo + 0.001*contador
+    # para garantizar que el valor siempre sea distinto al anterior.
+    "_jump_counter": 0,
 }
 
 for k, v in {**AUDIO_DEFAULTS, **GLOBAL_DEFAULTS}.items():
@@ -595,6 +610,31 @@ def build_timestamped_transcript(segments):
         if txt:
             lines.append(f"[{t}] {txt}")
     return "\n".join(lines)
+
+
+def jump_to_time(seconds, segment_idx=-1):
+    """
+    Salta el reproductor a un tiempo específico y actualiza el segmento activo.
+
+    El problema: st.audio solo salta cuando start_time CAMBIA entre renders.
+    Si el usuario ya estaba en t=45 y vuelve a hacer clic en el mismo resultado,
+    Streamlit no detecta cambio y el audio no salta.
+
+    Solución: guardamos un contador que se incrementa en cada salto.
+    El start_time real que pasamos a st.audio es:
+        segundos + (contador * 0.001)
+    Eso garantiza que el valor SIEMPRE sea diferente, forzando el salto,
+    sin desplazar perceptiblemente el punto de reproducción (1ms de diferencia).
+    """
+    st.session_state._jump_counter = st.session_state.get("_jump_counter", 0) + 1
+    # Guardamos el tiempo base limpio para cálculos posteriores
+    st.session_state.audio_start_time = max(0.0, float(seconds))
+    # El valor real para st.audio incluye el micro-offset
+    st.session_state._audio_start_actual = (
+        max(0.0, float(seconds)) + st.session_state._jump_counter * 0.001
+    )
+    if segment_idx >= 0:
+        st.session_state.active_segment_idx = segment_idx
 
 
 # ============================================================
@@ -1502,10 +1542,9 @@ def render_markers(markers, segs):
         mc1, mc2, mc3 = st.columns([0.8, 4, 0.5])
         with mc1:
             if st.button(f"▶ {fmt_time(m['time'])}", key=f"mk_play_{i}"):
-                st.session_state.audio_start_time = max(0, m["time"] - 1)
                 seg_idx = next((j for j, s in enumerate(segs)
                                 if s.get("start", 0) <= m["time"] <= s.get("end", 0)), -1)
-                st.session_state.active_segment_idx = seg_idx
+                jump_to_time(max(0, m["time"] - 1), seg_idx)
                 st.rerun()
         with mc2:
             note_html = f"<span class='marker-note'> — {m['note']}</span>" if m.get("note") else ""
@@ -1719,8 +1758,9 @@ def main_app():
         with panel_audio:
             st.markdown("<div class='panel-header'>🎵 Reproductor</div>", unsafe_allow_html=True)
             if st.session_state.audio_path:
-                st.audio(st.session_state.audio_path,
-                         start_time=int(max(0, st.session_state.audio_start_time)))
+                _start = st.session_state.get("_audio_start_actual",
+                                               st.session_state.audio_start_time)
+                st.audio(st.session_state.audio_path, start_time=_start)
 
             # ── MARCADORES ──
             st.markdown(
@@ -1809,14 +1849,12 @@ def main_app():
                     with nav1:
                         if st.button("⏮ Anterior", disabled=(active_idx <= 0), key="nav_prev_red"):
                             new_idx = max(0, active_idx - 1)
-                            st.session_state.active_segment_idx = new_idx
-                            st.session_state.audio_start_time = float(segs[new_idx].get("start", 0))
+                            jump_to_time(float(segs[new_idx].get("start", 0)), new_idx)
                             st.rerun()
                     with nav2:
                         if st.button("⏭ Siguiente", disabled=(active_idx >= len(segs) - 1), key="nav_next_red"):
                             new_idx = min(len(segs) - 1, active_idx + 1)
-                            st.session_state.active_segment_idx = new_idx
-                            st.session_state.audio_start_time = float(segs[new_idx].get("start", 0))
+                            jump_to_time(float(segs[new_idx].get("start", 0)), new_idx)
                             st.rerun()
 
     # ════════════════════════════════════════════════════
@@ -1828,19 +1866,31 @@ def main_app():
             if q:
                 st.session_state.last_search_query = q
                 st.session_state._search_pending = True
-            else:
-                st.session_state.search_results = None
-                st.session_state.last_search_query = ""
+            # Si el campo está vacío NO borramos last_search_query ni results
+            # El resaltado persiste hasta que el usuario haga una nueva búsqueda
+            # o use el botón "Limpiar búsqueda"
 
         # Reproductor siempre visible en esta pestaña
         if st.session_state.audio_path:
-            st.audio(st.session_state.audio_path,
-                     start_time=int(max(0, st.session_state.audio_start_time)))
+            _start = st.session_state.get("_audio_start_actual",
+                                           st.session_state.audio_start_time)
+            st.audio(st.session_state.audio_path, start_time=_start)
 
-        # Caja de búsqueda
-        query = st.text_input("q", placeholder="🔍 Buscar palabra o frase... (Enter para buscar)",
-                              label_visibility="collapsed", key="q_input",
-                              on_change=execute_search)
+        # Caja de búsqueda con botón limpiar
+        sq1, sq2 = st.columns([5, 0.7])
+        with sq1:
+            query = st.text_input("q", placeholder="🔍 Buscar palabra o frase... (Enter para buscar)",
+                                  label_visibility="collapsed", key="q_input",
+                                  on_change=execute_search)
+        with sq2:
+            if st.button("✕ Limpiar", key="clear_search", use_container_width=True,
+                         help="Limpiar búsqueda y resaltado"):
+                st.session_state.search_results = None
+                st.session_state.last_search_query = ""
+                # Limpiar también el campo de texto
+                if "q_input" in st.session_state:
+                    st.session_state.q_input = ""
+                st.rerun()
 
         if st.session_state.get("_search_pending"):
             sq = st.session_state.last_search_query
@@ -1873,10 +1923,9 @@ def main_app():
 
                 rc1, rc2 = st.columns([0.65, 5])
                 with rc1:
-                    # Botón de timestamp — clic salta al audio
+                    # Botón de timestamp — clic salta al audio, siempre funciona
                     if st.button(f"▶ {r.get('time_label','0:00')}", key=f"p_{i}_{r.get('idx',i)}"):
-                        st.session_state.audio_start_time = max(0, r.get("start_time", 0) - 2)
-                        st.session_state.active_segment_idx = r.get("idx", -1)
+                        jump_to_time(max(0, r.get("start_time", 0) - 2), r.get("idx", -1))
                         st.rerun()
                 with rc2:
                     st.markdown(f"""
@@ -1914,7 +1963,7 @@ def main_app():
                         st.markdown(f"`{fmt_time(gap['start'])}` → `{fmt_time(gap['end'])}` — **{gap['duration']:.1f}s**")
                     with gc2:
                         if st.button("▶ ir", key=f"gap_{gap['start']:.0f}"):
-                            st.session_state.audio_start_time = max(0, gap["start"] - 1)
+                            jump_to_time(max(0, gap["start"] - 1))
                             st.rerun()
 
         # Nuevo audio desde esta pestaña también
@@ -1985,13 +2034,11 @@ def main_app():
                             with gc1:
                                 if st.button(f"▶ ir", key=f"gp_{fname}_{i}",
                                              help=f"Ir a {r.get('time_label','0:00')} en {fname}"):
-                                    # Cambiar al audio correspondiente
                                     aid = r.get("audio_id", "")
                                     if aid != st.session_state.active_audio_id:
                                         history_save_current()
                                         history_load(aid)
-                                    st.session_state.audio_start_time = max(0, r.get("start_time", 0) - 2)
-                                    st.session_state.active_segment_idx = r.get("idx", -1)
+                                    jump_to_time(max(0, r.get("start_time", 0) - 2), r.get("idx", -1))
                                     st.rerun()
                             with gc2:
                                 st.markdown(f"""
