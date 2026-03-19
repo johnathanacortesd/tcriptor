@@ -12,7 +12,7 @@ from datetime import datetime
 
 # --- CONFIGURACIÓN ---
 st.set_page_config(
-    page_title="Transcriptor Pro",
+    page_title="Transcriptor Pro - Johnathan Cortés 🐈‍⬛",
     page_icon="🎙️",
     layout="wide",
     initial_sidebar_state="collapsed"
