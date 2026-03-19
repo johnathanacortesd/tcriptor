@@ -1562,8 +1562,8 @@ def main_app():
         """, unsafe_allow_html=True)
 
     # ── TABS PRINCIPALES ──
-    tab_redaccion, tab_busqueda, tab_global, tab_chat, tab_analisis, tab_export = st.tabs([
-        "✍️ Redacción", "🔍 Búsqueda", "🌐 Global", "💬 Chat IA", "📊 Análisis", "📥 Exportar"
+    tab_busqueda, tab_redaccion, tab_global, tab_chat, tab_analisis, tab_export = st.tabs([
+        "🔍 Búsqueda", "✍️ Redacción", "🌐 Global", "💬 Chat IA", "📊 Análisis", "📥 Exportar"
     ])
 
     # ════════════════════════════════════════════════════
@@ -1613,23 +1613,39 @@ def main_app():
                          start_time=int(max(0, st.session_state.audio_start_time)))
 
             # ── MARCADORES ──
-            st.markdown("<div class='panel-header' style='margin-top:10px'>📌 Marcadores</div>",
-                        unsafe_allow_html=True)
+            st.markdown(
+                "<div class='panel-header' style='margin-top:10px'>📌 Marcadores</div>",
+                unsafe_allow_html=True
+            )
 
-            # Agregar marcador
-            with st.expander("➕ Agregar marcador", expanded=False):
+            # Toggle para mostrar formulario
+            show_mk_form = st.checkbox("➕ Agregar marcador", value=False, key="show_mk_form")
+
+            if show_mk_form:
+                st.markdown(
+                    "<div style='background:var(--bg);border:1px solid var(--border);"
+                    "border-radius:8px;padding:10px 12px;margin-bottom:8px'>",
+                    unsafe_allow_html=True
+                )
                 mk_col1, mk_col2 = st.columns([1, 1])
                 with mk_col1:
-                    mk_time_str = st.text_input("Tiempo (M:SS o H:MM:SS)",
-                                                value=fmt_time(st.session_state.audio_start_time),
-                                                key="mk_time_input",
-                                                placeholder="1:23")
+                    mk_time_str = st.text_input(
+                        "⏱ Tiempo",
+                        value=fmt_time(st.session_state.audio_start_time),
+                        key="mk_time_input",
+                        placeholder="1:23",
+                        help="Formato M:SS o H:MM:SS"
+                    )
                 with mk_col2:
-                    mk_type = st.selectbox("Tipo", list(MARKER_COLORS.keys()), key="mk_type")
-                mk_note = st.text_input("Nota (opcional)", key="mk_note", placeholder="Descripción...")
+                    mk_type = st.selectbox("🏷 Tipo", list(MARKER_COLORS.keys()), key="mk_type")
 
-                if st.button("📌 Agregar marcador", use_container_width=True):
-                    # Parsear tiempo
+                mk_note = st.text_input(
+                    "📝 Nota (opcional)", key="mk_note",
+                    placeholder="Describe este momento..."
+                )
+                st.markdown("</div>", unsafe_allow_html=True)
+
+                if st.button("📌 Guardar marcador", use_container_width=True, type="primary"):
                     try:
                         parts_t = mk_time_str.strip().split(":")
                         if len(parts_t) == 2:
@@ -1645,10 +1661,11 @@ def main_app():
                         })
                         st.session_state.markers.sort(key=lambda x: x["time"])
                         history_save_current()
-                        st.success("Marcador agregado")
+                        # Cerrar formulario y refrescar
+                        st.session_state.show_mk_form = False
                         st.rerun()
                     except Exception:
-                        st.error("Formato de tiempo inválido. Usa M:SS o H:MM:SS")
+                        st.error("Formato inválido. Usa M:SS — ejemplo: 1:23 o 0:45")
 
             render_markers(st.session_state.markers, segs)
 
@@ -1692,22 +1709,8 @@ def main_app():
                             st.session_state.audio_start_time = float(segs[new_idx].get("start", 0))
                             st.rerun()
 
-        # Nuevo audio
-        st.markdown("---")
-        show_new = st.checkbox("📂 Agregar otro audio al historial", value=False, key="show_new_upload_red")
-        if show_new:
-            if len(hist) >= MAX_HISTORY:
-                st.warning(f"Historial lleno ({MAX_HISTORY} audios). Elimina uno desde la barra superior.")
-            else:
-                new_file = st.file_uploader("x2", type=["mp3", "wav", "m4a", "ogg", "mp4"],
-                                            label_visibility="collapsed", key="upload_new_red")
-                if new_file:
-                    if st.button("🔄 Procesar y agregar", type="primary", use_container_width=True):
-                        if process_audio(client, new_file, model, do_correct):
-                            st.rerun()
-
     # ════════════════════════════════════════════════════
-    # TAB: BÚSQUEDA (en el audio activo)
+    # TAB: BÚSQUEDA (PRIMERA PESTAÑA — con reproductor)
     # ════════════════════════════════════════════════════
     with tab_busqueda:
         def execute_search():
@@ -1719,7 +1722,13 @@ def main_app():
                 st.session_state.search_results = None
                 st.session_state.last_search_query = ""
 
-        query = st.text_input("q", placeholder="Buscar en este audio... (Enter)",
+        # Reproductor siempre visible en esta pestaña
+        if st.session_state.audio_path:
+            st.audio(st.session_state.audio_path,
+                     start_time=int(max(0, st.session_state.audio_start_time)))
+
+        # Caja de búsqueda
+        query = st.text_input("q", placeholder="🔍 Buscar palabra o frase... (Enter para buscar)",
                               label_visibility="collapsed", key="q_input",
                               on_change=execute_search)
 
@@ -1754,6 +1763,7 @@ def main_app():
 
                 rc1, rc2 = st.columns([0.65, 5])
                 with rc1:
+                    # Botón de timestamp — clic salta al audio
                     if st.button(f"▶ {r.get('time_label','0:00')}", key=f"p_{i}_{r.get('idx',i)}"):
                         st.session_state.audio_start_time = max(0, r.get("start_time", 0) - 2)
                         st.session_state.active_segment_idx = r.get("idx", -1)
@@ -1770,22 +1780,24 @@ def main_app():
                     </div>
                     """, unsafe_allow_html=True)
         elif aq and res is not None and len(res) == 0:
-            st.markdown('<div class="no-results-box">🔍 Sin resultados. Prueba con otras palabras.</div>',
+            st.markdown('<div class="no-results-box">🔍 Sin resultados. Prueba con otras palabras o activa búsqueda aproximada en el sidebar.</div>',
                         unsafe_allow_html=True)
 
-        # Texto completo con resaltado
+        # Texto completo con resaltado — siempre visible
         st.markdown("---")
         st.markdown("##### 📄 Texto completo")
         if aq:
             total_in_text = count_occurrences(txt, aq)
             if total_in_text > 0:
-                st.caption(f"🔶 {total_in_text} ocurrencia{'s' if total_in_text != 1 else ''}")
+                st.caption(f"🔶 {total_in_text} ocurrencia{'s' if total_in_text != 1 else ''} resaltada{'s' if total_in_text != 1 else ''}")
         hl_txt = highlight_full_text(txt, aq) if aq else txt
         st.markdown(f"<div class='full-text-box'>{hl_txt}</div>", unsafe_allow_html=True)
 
+        # Huecos
         if gaps:
             st.markdown("---")
-            with st.expander(f"⚠️ {len(gaps)} hueco{'s' if len(gaps)!=1 else ''}", expanded=False):
+            with st.expander(f"⚠️ {len(gaps)} hueco{'s' if len(gaps)!=1 else ''} detectado{'s' if len(gaps)!=1 else ''}", expanded=False):
+                st.caption("Secciones sin habla (silencio, música o ruido)")
                 for gap in gaps:
                     gc1, gc2 = st.columns([3, 1])
                     with gc1:
@@ -1793,6 +1805,20 @@ def main_app():
                     with gc2:
                         if st.button("▶ ir", key=f"gap_{gap['start']:.0f}"):
                             st.session_state.audio_start_time = max(0, gap["start"] - 1)
+                            st.rerun()
+
+        # Nuevo audio desde esta pestaña también
+        st.markdown("---")
+        show_new_b = st.checkbox("📂 Agregar otro audio", value=False, key="show_new_busqueda")
+        if show_new_b:
+            if len(hist) >= MAX_HISTORY:
+                st.warning(f"Historial lleno ({MAX_HISTORY} audios).")
+            else:
+                new_file_b = st.file_uploader("xb", type=["mp3", "wav", "m4a", "ogg", "mp4"],
+                                              label_visibility="collapsed", key="upload_new_b")
+                if new_file_b:
+                    if st.button("🔄 Procesar", type="primary", use_container_width=True, key="proc_b"):
+                        if process_audio(client, new_file_b, model, do_correct):
                             st.rerun()
 
     # ════════════════════════════════════════════════════
