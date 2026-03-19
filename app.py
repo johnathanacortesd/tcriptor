@@ -437,8 +437,8 @@ GLOBAL_DEFAULTS = {
     "_search_pending": False,
     "_global_search_pending": False,
     # Contador que se incrementa en cada salto de timestamp.
-    # Se suma como micro-offset al start_time para forzar que
-    # Streamlit detecte un valor DIFERENTE y re-renderice st.audio.
+    # Se usa como parte del KEY de st.audio para forzar
+    # la recreación completa del widget.
     "_jump_counter": 0,
 }
 
@@ -613,27 +613,13 @@ def build_timestamped_transcript(segments):
     return "\n".join(lines)
 
 
-def _get_effective_start_time():
-    """
-    Calcula el start_time efectivo para st.audio.
-    Cada salto incrementa _jump_counter. Sumamos un micro-offset
-    proporcional al contador para que el valor SIEMPRE sea diferente,
-    forzando a Streamlit a actualizar el reproductor.
-    El offset es de 0.01s por salto — imperceptible para el oído
-    pero suficiente para que float != float anterior.
-    """
-    base = st.session_state.audio_start_time
-    counter = st.session_state.get("_jump_counter", 0)
-    # Offset cíclico: 0.01 a 0.99 para evitar acumular demasiado
-    offset = (counter % 100) * 0.01
-    return max(0, base + offset)
-
-
 def jump_to_time(seconds, segment_idx=-1):
     """
     Salta el reproductor a un tiempo específico.
-    Incrementa _jump_counter para garantizar que el start_time
-    efectivo sea SIEMPRE diferente al anterior, forzando el re-render.
+    Incrementa _jump_counter para que el KEY de st.audio cambie,
+    forzando a Streamlit a destruir y recrear el widget completo.
+    Esto garantiza que el reproductor SIEMPRE salte al tiempo indicado,
+    incluso si se hace clic en el mismo timestamp varias veces.
     """
     st.session_state._jump_counter = st.session_state.get("_jump_counter", 0) + 1
     st.session_state.audio_start_time = max(0, int(seconds))
@@ -1693,7 +1679,6 @@ STOPWORDS_ES = {
     'qué', 'quién', 'quiénes', 'cuál', 'cuáles', 'cuánto', 'cuánta',
     'cuántos', 'cuántas', 'cómo', 'dónde', 'cuándo',
     'quien', 'quienes', 'cual', 'cuales', 'donde', 'cuyo', 'cuya', 'cuyos', 'cuyas',
-    # ser
     'soy', 'eres', 'es', 'somos', 'sois', 'son',
     'era', 'eras', 'éramos', 'erais', 'eran',
     'fui', 'fue', 'fuimos', 'fuisteis', 'fueron',
@@ -1703,7 +1688,6 @@ STOPWORDS_ES = {
     'fuera', 'fueras', 'fuéramos', 'fuerais', 'fueran',
     'fuese', 'fueses', 'fuésemos', 'fueseis', 'fuesen',
     'sido', 'ser', 'siendo',
-    # estar
     'estoy', 'estás', 'está', 'estamos', 'estáis', 'están',
     'estaba', 'estabas', 'estábamos', 'estabais', 'estaban',
     'estuve', 'estuviste', 'estuvo', 'estuvimos', 'estuvisteis', 'estuvieron',
@@ -1713,7 +1697,6 @@ STOPWORDS_ES = {
     'estuviera', 'estuvieras', 'estuviéramos', 'estuvierais', 'estuvieran',
     'estuviese', 'estuvieses', 'estuviésemos', 'estuvieseis', 'estuviesen',
     'estado', 'estar', 'estando',
-    # haber
     'he', 'has', 'ha', 'hay', 'hemos', 'habéis', 'han',
     'había', 'habías', 'habíamos', 'habíais', 'habían',
     'hube', 'hubiste', 'hubo', 'hubimos', 'hubisteis', 'hubieron',
@@ -1723,7 +1706,6 @@ STOPWORDS_ES = {
     'hubiera', 'hubieras', 'hubiéramos', 'hubierais', 'hubieran',
     'hubiese', 'hubieses', 'hubiésemos', 'hubieseis', 'hubiesen',
     'habido', 'haber', 'habiendo',
-    # tener
     'tengo', 'tienes', 'tiene', 'tenemos', 'tenéis', 'tienen',
     'tenía', 'tenías', 'teníamos', 'teníais', 'tenían',
     'tuve', 'tuviste', 'tuvo', 'tuvimos', 'tuvisteis', 'tuvieron',
@@ -1732,7 +1714,6 @@ STOPWORDS_ES = {
     'tenga', 'tengas', 'tengamos', 'tengáis', 'tengan',
     'tuviera', 'tuvieras', 'tuviéramos', 'tuvierais', 'tuvieran',
     'tener', 'tenido', 'teniendo',
-    # hacer
     'hago', 'haces', 'hace', 'hacemos', 'hacéis', 'hacen',
     'hacía', 'hacías', 'hacíamos', 'hacíais', 'hacían',
     'hice', 'hiciste', 'hizo', 'hicimos', 'hicisteis', 'hicieron',
@@ -1740,7 +1721,6 @@ STOPWORDS_ES = {
     'haría', 'harías', 'haríamos', 'haríais', 'harían',
     'haga', 'hagas', 'hagamos', 'hagáis', 'hagan',
     'hacer', 'hecho', 'haciendo',
-    # poder
     'puedo', 'puedes', 'puede', 'podemos', 'podéis', 'pueden',
     'podía', 'podías', 'podíamos', 'podíais', 'podían',
     'pude', 'pudiste', 'pudo', 'pudimos', 'pudisteis', 'pudieron',
@@ -1748,14 +1728,12 @@ STOPWORDS_ES = {
     'podría', 'podrías', 'podríamos', 'podríais', 'podrían',
     'pueda', 'puedas', 'podamos', 'podáis', 'puedan',
     'poder', 'podido', 'pudiendo',
-    # ir
     'voy', 'vas', 'va', 'vamos', 'vais', 'van',
     'iba', 'ibas', 'íbamos', 'ibais', 'iban',
     'iré', 'irás', 'irá', 'iremos', 'iréis', 'irán',
     'iría', 'irías', 'iríamos', 'iríais', 'irían',
     'vaya', 'vayas', 'vayamos', 'vayáis', 'vayan',
     'ir', 'ido', 'yendo',
-    # decir
     'digo', 'dices', 'dice', 'decimos', 'decís', 'dicen',
     'decía', 'decías', 'decíamos', 'decíais', 'decían',
     'dije', 'dijiste', 'dijo', 'dijimos', 'dijisteis', 'dijeron',
@@ -1763,29 +1741,24 @@ STOPWORDS_ES = {
     'diría', 'dirías', 'diríamos', 'diríais', 'dirían',
     'diga', 'digas', 'digamos', 'digáis', 'digan',
     'decir', 'dicho', 'diciendo',
-    # dar
     'doy', 'das', 'da', 'damos', 'dais', 'dan',
     'daba', 'dabas', 'dábamos', 'dabais', 'daban',
     'di', 'diste', 'dio', 'dimos', 'disteis', 'dieron',
     'daré', 'darás', 'dará', 'daremos', 'daréis', 'darán',
     'daría', 'darías', 'daríamos', 'daríais', 'darían',
     'dar', 'dado', 'dando',
-    # saber
     'sé', 'sabes', 'sabe', 'sabemos', 'sabéis', 'saben',
     'sabía', 'sabías', 'sabíamos', 'sabíais', 'sabían',
     'supe', 'supiste', 'supo', 'supimos', 'supisteis', 'supieron',
     'saber', 'sabido', 'sabiendo',
-    # querer
     'quiero', 'quieres', 'quiere', 'queremos', 'queréis', 'quieren',
     'quería', 'querías', 'queríamos', 'queríais', 'querían',
     'quise', 'quisiste', 'quiso', 'quisimos', 'quisisteis', 'quisieron',
     'querer', 'querido', 'queriendo',
-    # ver
     'veo', 'ves', 've', 'vemos', 'veis', 'ven',
     'veía', 'veías', 'veíamos', 'veíais', 'veían',
     'vi', 'viste', 'vio', 'vimos', 'visteis', 'vieron',
     'ver', 'visto', 'viendo',
-    # adverbios
     'no', 'sí', 'si', 'más', 'menos', 'muy', 'mucho', 'poco',
     'también', 'tampoco', 'ya', 'aún', 'aun', 'todavía',
     'siempre', 'nunca', 'jamás',
@@ -1797,17 +1770,14 @@ STOPWORDS_ES = {
     'así', 'tan', 'tanto', 'tanta', 'tantos', 'tantas',
     'solo', 'sólo', 'solamente',
     'además', 'incluso',
-    # muletillas habla
     'bueno', 'pues', 'entonces', 'digamos', 'verdad',
     'claro', 'oye', 'mira', 'mire', 'vamos',
     'sea', 'osea', 'ósea',
-    # números
     'uno', 'dos', 'tres', 'cuatro', 'cinco',
     'seis', 'siete', 'ocho', 'nueve', 'diez',
     'once', 'doce', 'trece', 'catorce', 'quince',
     'veinte', 'treinta', 'cien', 'mil',
     'primero', 'primera', 'segundo', 'segunda',
-    # misceláneos
     'vez', 'veces', 'parte', 'manera', 'forma',
     'cosa', 'cosas', 'tipo', 'tipos', 'tiempo',
     'día', 'días', 'año', 'años', 'momento',
@@ -1983,8 +1953,14 @@ def main_app():
         "🔍 Búsqueda", "✍️ Redacción", "🌐 Global", "💬 Chat IA", "📊 Análisis", "📥 Exportar"
     ])
 
-    # Calcular start_time efectivo UNA VEZ para todo el render
-    effective_start = _get_effective_start_time()
+    # ═══════════════════════════════════════════════════════
+    # CLAVE DE LA CORRECCIÓN:
+    # Usamos _jump_counter como parte del KEY de st.audio.
+    # Al cambiar el key, Streamlit destruye y recrea el widget,
+    # forzando que el reproductor arranque en el start_time indicado.
+    # ═══════════════════════════════════════════════════════
+    audio_widget_key = f"audio_player_{st.session_state._jump_counter}"
+    audio_start = st.session_state.audio_start_time
 
     # ════════════════════════════════════════════════════
     # TAB: REDACCIÓN
@@ -2025,7 +2001,11 @@ def main_app():
         with panel_audio:
             st.markdown("<div class='panel-header'>🎵 Reproductor</div>", unsafe_allow_html=True)
             if st.session_state.audio_path:
-                st.audio(st.session_state.audio_path, start_time=effective_start)
+                st.audio(
+                    st.session_state.audio_path,
+                    start_time=audio_start,
+                    key=f"audio_redaccion_{st.session_state._jump_counter}"
+                )
 
             st.markdown("<div class='panel-header' style='margin-top:10px'>📌 Marcadores</div>",
                         unsafe_allow_html=True)
@@ -2098,7 +2078,11 @@ def main_app():
                 st.session_state._search_pending = True
 
         if st.session_state.audio_path:
-            st.audio(st.session_state.audio_path, start_time=effective_start)
+            st.audio(
+                st.session_state.audio_path,
+                start_time=audio_start,
+                key=f"audio_busqueda_{st.session_state._jump_counter}"
+            )
 
         sq1, sq2 = st.columns([5, 0.7])
         with sq1:
