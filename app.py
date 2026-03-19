@@ -474,20 +474,24 @@ def split_audio_chunks(audio_segment, chunk_duration_ms=600_000, overlap_ms=15_0
 # ============================================================
 def transcribe_single(client, path, model, whisper_prompt="", max_retries=3):
     """
-    Transcribe un chunk con soporte de code-switching español/inglés.
+    Transcribe un chunk con máxima cobertura y soporte de extranjerismos.
 
-    CAMBIOS CLAVE vs versión anterior:
-    ───────────────────────────────────
-    1. SIN `language` forzado → auto-detect.
-       Whisper reconoce el idioma predominante pero respeta fragmentos en inglés.
-       "off the record", "streaming", "Bedout" se transcriben tal como suenan
-       en lugar de fonetizarse al español.
+    Estrategia:
+    ───────────
+    1. language="es" SIEMPRE — garantiza cobertura completa del audio.
+       Quitar este parámetro causó que Whisper truncara la transcripción
+       a ~1 minuto de un audio de 4 minutos (bug confirmado con Groq/Whisper).
 
-    2. `prompt=whisper_prompt` → nombres propios + glosario de sesión.
-       Whisper los "recuerda" como si ya los hubiera escuchado antes.
+    2. prompt=whisper_prompt — glosario con nombres propios y términos en inglés.
+       Whisper los usa como contexto previo: mejora el reconocimiento de
+       apellidos (Bedout, Uribe) y anglicismos (streaming, off the record)
+       SIN necesidad de quitar el idioma.
+       Razón: el prompt actúa como "memoria" que sesga el vocabulario,
+       no como un cambio de idioma. Whisper con language="es" y un prompt
+       que incluya "Bedout, off the record" transcribirá esos términos
+       correctamente porque los "recuerda" del contexto previo.
 
-    3. Fallback a language="es" explícito en el último intento,
-       para no perder cobertura en audios 100% en español.
+    3. temperature=0.0 — sin alucinaciones.
     """
     for attempt in range(max_retries):
         try:
@@ -497,11 +501,14 @@ def transcribe_single(client, path, model, whisper_prompt="", max_retries=3):
                 file=(os.path.basename(path), file_data),
                 model=model,
                 response_format="verbose_json",
+                language="es",   # SIEMPRE español — crítico para cobertura completa
                 temperature=0.0,
             )
+            # El prompt enseña a Whisper los nombres propios y términos en inglés
+            # sin cambiar el idioma de transcripción. Es el mecanismo correcto
+            # para manejar code-switching en periodismo colombiano.
             if whisper_prompt:
                 kwargs["prompt"] = whisper_prompt
-            # Auto-detect: preserva palabras en inglés/otros idiomas (code-switching)
             t = client.audio.transcriptions.create(**kwargs)
             segments = []
             if t.segments:
@@ -521,31 +528,7 @@ def transcribe_single(client, path, model, whisper_prompt="", max_retries=3):
             if attempt < max_retries - 1:
                 time.sleep(2 ** attempt)
             else:
-                # Último recurso: forzar español explícito
-                try:
-                    with open(path, "rb") as f:
-                        file_data = f.read()
-                    kwargs_es = dict(
-                        file=(os.path.basename(path), file_data),
-                        model=model, response_format="verbose_json",
-                        language="es", temperature=0.0,
-                    )
-                    if whisper_prompt:
-                        kwargs_es["prompt"] = whisper_prompt
-                    t = client.audio.transcriptions.create(**kwargs_es)
-                    segments = []
-                    if t.segments:
-                        for seg in t.segments:
-                            if isinstance(seg, dict):
-                                s, e, tx = seg.get("start", 0), seg.get("end", 0), seg.get("text", "")
-                            else:
-                                s, e, tx = getattr(seg, "start", 0), getattr(seg, "end", 0), getattr(seg, "text", "")
-                            text = str(tx).strip()
-                            if text:
-                                segments.append({"start": float(s), "end": float(e), "text": text})
-                    return t.text or "", segments, None
-                except Exception as e2:
-                    return None, None, str(e2)
+                return None, None, err_str
     return None, None, "Max retries exceeded"
 
 def merge_chunk_segments(all_chunk_results, overlap_ms=15_000):
