@@ -1500,7 +1500,7 @@ def main_app():
         <div class="app-bar-left">
             <div class="app-logo">🎙️</div>
             <span class="app-name">Transcriptor Pro</span>
-            <span class="app-tag">BETA</span>
+            <span class="app-tag">V2 - Johnathan Cortés 🐈‍⬛</span>
         </div>
     </div>
     """, unsafe_allow_html=True)
