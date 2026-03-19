@@ -1399,15 +1399,15 @@ def main_app():
             btn_col1, btn_col2 = st.columns(2)
             with btn_col1:
                 if st.button("🏷️ Extraer Entidades", type="primary", use_container_width=True):
-                    st.session_state.entities = None  # Forzar re-extracción
+                    st.session_state.entities = None
                     with st.spinner("Extrayendo entidades..."):
-                        extract_entities(client, txt)
+                        _ = extract_entities(client, txt)
                     st.rerun()
             with btn_col2:
                 if st.button("📰 Generar Lead", use_container_width=True):
-                    st.session_state.lead_cache = None  # Forzar re-generación
+                    st.session_state.lead_cache = None
                     with st.spinner("Generando titular y lead..."):
-                        generate_lead(client, txt, fname_display)
+                        _ = generate_lead(client, txt, fname_display)
                     st.rerun()
 
             if st.session_state.entities is not None:
