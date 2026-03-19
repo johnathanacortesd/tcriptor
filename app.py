@@ -5,6 +5,10 @@ import unicodedata
 from groq import Groq
 from difflib import SequenceMatcher
 import re
+import json
+import time
+import math
+from datetime import datetime
 
 # --- CONFIGURACIÓN ---
 st.set_page_config(
@@ -37,6 +41,10 @@ st.markdown("""
         --amber-bg: #fffbeb;
         --red: #dc2626;
         --red-bg: #fef2f2;
+        --blue: #2563eb;
+        --blue-bg: #eff6ff;
+        --purple: #7c3aed;
+        --purple-bg: #f5f3ff;
         --radius: 12px;
         --radius-sm: 8px;
         --radius-xs: 6px;
@@ -57,12 +65,10 @@ st.markdown("""
     #MainMenu, footer, header { visibility: hidden; }
     .stDeployButton { display: none; }
 
-    /* Ocultar TODOS los labels de uploaders, toggles, sliders internos */
     .stFileUploader > label,
     .stFileUploader [data-testid="stFileUploaderDropzoneInstructions"] > div > span,
     .uploadedFileName { font-size: 0.78rem !important; }
 
-    /* Ocultar textos fantasma de expander arrow */
     details > summary > span > div[data-testid="stMarkdownContainer"] > p {
         font-size: 0.85rem !important;
     }
@@ -103,6 +109,7 @@ st.markdown("""
     }
     .stat-chip strong { color: var(--text); font-weight: 600; }
     .stat-chip-ok { background: var(--green-bg); color: var(--green); border-color: #a7f3d0; }
+    .stat-chip-warn { background: var(--amber-bg); color: var(--amber); border-color: #fcd34d; }
 
     /* RESULTADOS */
     .sr-card {
@@ -126,6 +133,10 @@ st.markdown("""
     .sr-badge-low { background: var(--red-bg); color: var(--red); }
     .sr-body { font-size: 0.82rem; line-height: 1.6; color: var(--text); }
     .sr-ctx { color: var(--text-muted); }
+    .sr-segment-full {
+        font-size: 0.78rem; line-height: 1.5; color: var(--text-secondary);
+        margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--border);
+    }
 
     .hl {
         background: linear-gradient(120deg, #fed7aa, #fdba74);
@@ -137,7 +148,7 @@ st.markdown("""
         background: var(--surface); border: 1px solid var(--border);
         border-radius: var(--radius-sm); padding: 16px 20px;
         font-size: 0.85rem; line-height: 1.85; color: var(--text);
-        max-height: 380px; overflow-y: auto;
+        max-height: 480px; overflow-y: auto;
     }
     .full-text-box::-webkit-scrollbar { width: 5px; }
     .full-text-box::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
@@ -186,6 +197,43 @@ st.markdown("""
     .stAudio { margin: 4px 0 8px 0; }
     .stChatMessage { font-size: 0.88rem; }
     hr { border-color: var(--border) !important; margin: 8px 0 !important; }
+
+    /* ANALYSIS CARDS */
+    .analysis-card {
+        background: var(--surface); border: 1px solid var(--border);
+        border-radius: var(--radius-sm); padding: 16px 20px;
+        margin-bottom: 10px; box-shadow: var(--shadow-xs);
+    }
+    .analysis-card h4 {
+        font-size: 0.9rem; font-weight: 600; color: var(--text);
+        margin: 0 0 8px 0; display: flex; align-items: center; gap: 6px;
+    }
+    .analysis-content {
+        font-size: 0.83rem; line-height: 1.7; color: var(--text);
+    }
+
+    .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin: 10px 0; }
+    .kpi-card {
+        background: var(--surface); border: 1px solid var(--border);
+        border-radius: var(--radius-sm); padding: 14px 16px; text-align: center;
+    }
+    .kpi-value { font-size: 1.4rem; font-weight: 700; color: var(--primary); }
+    .kpi-label { font-size: 0.7rem; color: var(--text-muted); margin-top: 2px; text-transform: uppercase; font-weight: 500; }
+
+    /* COVERAGE BAR */
+    .coverage-bar-container {
+        background: var(--bg); border-radius: 6px; height: 24px;
+        overflow: hidden; border: 1px solid var(--border); position: relative;
+        margin: 8px 0;
+    }
+    .coverage-bar-fill {
+        height: 100%; border-radius: 5px; transition: width 0.5s ease;
+        display: flex; align-items: center; justify-content: center;
+        font-size: 0.7rem; font-weight: 700; color: white;
+    }
+    .coverage-ok { background: linear-gradient(90deg, #059669, #10b981); }
+    .coverage-warn { background: linear-gradient(90deg, #d97706, #f59e0b); }
+    .coverage-bad { background: linear-gradient(90deg, #dc2626, #ef4444); }
 </style>
 """, unsafe_allow_html=True)
 
@@ -203,6 +251,12 @@ DEFAULTS = {
     "search_results": None,
     "last_search_query": "",
     "correction_applied": False,
+    "analysis_cache": {},
+    "uploaded_filename": None,
+    "audio_duration_ms": 0,
+    "coverage_pct": 100.0,
+    "transcript_gaps": [],
+    "chunks_used": 1,
 }
 for k, v in DEFAULTS.items():
     if k not in st.session_state:
@@ -216,6 +270,18 @@ def fmt_time(seconds):
     return f"{h}:{m:02d}:{sec:02d}" if h else f"{m}:{sec:02d}"
 
 
+def fmt_duration(seconds):
+    s = max(0, int(seconds))
+    h, m, sec = s // 3600, (s % 3600) // 60, s % 60
+    parts = []
+    if h:
+        parts.append(f"{h}h")
+    if m:
+        parts.append(f"{m}m")
+    parts.append(f"{sec}s")
+    return " ".join(parts)
+
+
 def norm(text):
     if not text:
         return ""
@@ -227,15 +293,40 @@ def norm(text):
 def highlight_html(text, query):
     if not query or not text:
         return text
-    pat = re.compile(re.escape(query), re.IGNORECASE)
-    if pat.search(text):
-        return pat.sub(lambda m: f"<span class='hl'>{m.group()}</span>", text)
     result = text
+    pat = re.compile(re.escape(query), re.IGNORECASE)
+    if pat.search(result):
+        return pat.sub(lambda m: f"<span class='hl'>{m.group()}</span>", result)
     for w in query.split():
-        if len(w) > 2:
+        if len(w) > 1:
             wp = re.compile(re.escape(w), re.IGNORECASE)
             result = wp.sub(lambda m: f"<span class='hl'>{m.group()}</span>", result)
     return result
+
+
+def highlight_full_text(text, query):
+    if not query or not text:
+        return text
+    result = text
+    pat = re.compile(re.escape(query), re.IGNORECASE)
+    if pat.search(result):
+        return pat.sub(lambda m: f"<span class='hl'>{m.group()}</span>", result)
+    words = [w for w in query.split() if len(w) > 1]
+    for w in words:
+        wp = re.compile(r'(?<![<\w])(' + re.escape(w) + r')(?![>\w])', re.IGNORECASE)
+        result = wp.sub(r"<span class='hl'>\1</span>", result)
+    return result
+
+
+def count_occurrences(text, query):
+    if not query or not text:
+        return 0
+    count = len(re.findall(re.escape(query), text, re.IGNORECASE))
+    if count == 0:
+        for w in query.split():
+            if len(w) > 1:
+                count += len(re.findall(re.escape(w), text, re.IGNORECASE))
+    return count
 
 
 # --- AUTH ---
@@ -288,7 +379,10 @@ def get_client():
         return None
 
 
-# --- AUDIO ---
+# ============================================================
+# AUDIO: SEGMENTACIÓN, TRANSCRIPCIÓN ROBUSTA Y VERIFICACIÓN
+# ============================================================
+
 def save_uploaded(f):
     try:
         safe = "".join(c for c in f.name if c.isalnum() or c in "._-") or "audio.mp3"
@@ -300,26 +394,474 @@ def save_uploaded(f):
         return None
 
 
-def transcribe(client, path, model):
+def get_audio_duration_ms(path):
+    """Obtiene duración del audio en milisegundos usando pydub."""
     try:
-        with open(path, "rb") as f:
-            t = client.audio.transcriptions.create(
-                file=(os.path.basename(path), f.read()),
-                model=model, response_format="verbose_json",
-                language="es", temperature=0.0
-            )
-        segments_list = []
-        if t.segments:
-            for seg in t.segments:
-                if isinstance(seg, dict):
-                    s, e, tx = seg.get("start", 0), seg.get("end", 0), seg.get("text", "")
-                else:
-                    s, e, tx = getattr(seg, "start", 0), getattr(seg, "end", 0), getattr(seg, "text", "")
-                segments_list.append({"start": float(s), "end": float(e), "text": str(tx).strip()})
-        return t.text, segments_list
-    except Exception as e:
-        st.error(f"Error de transcripción: {e}")
+        from pydub import AudioSegment
+        audio = AudioSegment.from_file(path)
+        return len(audio), audio
+    except Exception:
         return None, None
+
+
+def split_audio_chunks(audio_segment, chunk_duration_ms=600_000, overlap_ms=15_000):
+    """
+    Divide el audio en chunks con overlap para no perder contenido en los bordes.
+
+    Args:
+        audio_segment: pydub AudioSegment
+        chunk_duration_ms: duración de cada chunk (default 10 min = 600,000 ms)
+        overlap_ms: overlap entre chunks (default 15 seg = 15,000 ms)
+
+    Returns:
+        Lista de tuplas (chunk_audio, start_ms, end_ms, chunk_path)
+    """
+    total_ms = len(audio_segment)
+    chunks = []
+
+    if total_ms <= chunk_duration_ms:
+        # Audio cabe en un solo chunk
+        chunk_path = os.path.join(tempfile.gettempdir(), "chunk_0.mp3")
+        audio_segment.export(chunk_path, format="mp3", bitrate="128k")
+        chunks.append({
+            "path": chunk_path,
+            "start_ms": 0,
+            "end_ms": total_ms,
+            "index": 0
+        })
+        return chunks
+
+    # Dividir con overlap
+    start = 0
+    idx = 0
+    while start < total_ms:
+        end = min(start + chunk_duration_ms, total_ms)
+        chunk = audio_segment[start:end]
+
+        # Exportar chunk como mp3 con bitrate controlado
+        chunk_path = os.path.join(tempfile.gettempdir(), f"chunk_{idx}.mp3")
+        chunk.export(chunk_path, format="mp3", bitrate="128k")
+
+        # Verificar que no exceda 25 MB
+        file_size = os.path.getsize(chunk_path) / (1024 * 1024)
+        if file_size > 24:
+            # Re-exportar con bitrate menor
+            chunk.export(chunk_path, format="mp3", bitrate="64k")
+
+        chunks.append({
+            "path": chunk_path,
+            "start_ms": start,
+            "end_ms": end,
+            "index": idx
+        })
+
+        if end >= total_ms:
+            break
+
+        # Siguiente chunk empieza antes del final del actual (overlap)
+        start = end - overlap_ms
+        idx += 1
+
+    return chunks
+
+
+def transcribe_single(client, path, model, max_retries=3):
+    """Transcribe un archivo de audio con reintentos automáticos."""
+    for attempt in range(max_retries):
+        try:
+            with open(path, "rb") as f:
+                file_data = f.read()
+
+            t = client.audio.transcriptions.create(
+                file=(os.path.basename(path), file_data),
+                model=model,
+                response_format="verbose_json",
+                language="es",
+                temperature=0.0
+            )
+
+            segments = []
+            if t.segments:
+                for seg in t.segments:
+                    if isinstance(seg, dict):
+                        s = seg.get("start", 0)
+                        e = seg.get("end", 0)
+                        tx = seg.get("text", "")
+                    else:
+                        s = getattr(seg, "start", 0)
+                        e = getattr(seg, "end", 0)
+                        tx = getattr(seg, "text", "")
+                    text = str(tx).strip()
+                    if text:  # Solo agregar segmentos con texto
+                        segments.append({
+                            "start": float(s),
+                            "end": float(e),
+                            "text": text
+                        })
+
+            return t.text, segments, None
+
+        except Exception as e:
+            error_str = str(e)
+            if attempt < max_retries - 1:
+                wait = (attempt + 1) * 2  # Backoff: 2s, 4s, 6s
+                time.sleep(wait)
+            else:
+                return None, None, error_str
+
+    return None, None, "Max retries exceeded"
+
+
+def merge_chunk_segments(all_chunk_results, overlap_ms=15_000):
+    """
+    Fusiona segmentos de múltiples chunks, eliminando duplicados del overlap.
+
+    La estrategia:
+    - Cada chunk tiene sus timestamps relativos a su inicio
+    - Ajustamos timestamps al tiempo absoluto del audio completo
+    - En zonas de overlap, eliminamos segmentos duplicados comparando texto
+    """
+    if not all_chunk_results:
+        return [], ""
+
+    if len(all_chunk_results) == 1:
+        result = all_chunk_results[0]
+        return result["segments"], result["text"]
+
+    merged_segments = []
+    overlap_sec = overlap_ms / 1000.0
+
+    for ci, chunk_result in enumerate(all_chunk_results):
+        chunk_start_sec = chunk_result["start_ms"] / 1000.0
+        chunk_segments = chunk_result["segments"]
+
+        if not chunk_segments:
+            continue
+
+        # Ajustar timestamps al tiempo absoluto
+        adjusted = []
+        for seg in chunk_segments:
+            adjusted.append({
+                "start": seg["start"] + chunk_start_sec,
+                "end": seg["end"] + chunk_start_sec,
+                "text": seg["text"]
+            })
+
+        if ci == 0:
+            # Primer chunk: agregar todo
+            merged_segments.extend(adjusted)
+        else:
+            # Chunks subsecuentes: filtrar overlap
+            if not merged_segments:
+                merged_segments.extend(adjusted)
+                continue
+
+            last_merged_end = merged_segments[-1]["end"]
+
+            for seg in adjusted:
+                # Si el segmento empieza antes del final del último segmento fusionado
+                # es parte del overlap -> verificar si es duplicado
+                if seg["start"] < last_merged_end - 1.0:
+                    # Buscar si ya existe un segmento similar
+                    is_duplicate = False
+                    seg_norm = norm(seg["text"])
+                    for existing in merged_segments[-10:]:  # Comparar con últimos 10
+                        existing_norm = norm(existing["text"])
+                        # Comparar similitud
+                        if seg_norm and existing_norm:
+                            ratio = SequenceMatcher(None, seg_norm, existing_norm).ratio()
+                            if ratio > 0.7:
+                                is_duplicate = True
+                                break
+                            # También verificar si es subcadena
+                            if seg_norm in existing_norm or existing_norm in seg_norm:
+                                is_duplicate = True
+                                break
+                    if is_duplicate:
+                        continue
+
+                # No es duplicado o está fuera del overlap -> agregar
+                merged_segments.append(seg)
+                last_merged_end = max(last_merged_end, seg["end"])
+
+    # Ordenar por tiempo de inicio
+    merged_segments.sort(key=lambda x: x["start"])
+
+    # Construir texto completo
+    full_text = " ".join(seg["text"] for seg in merged_segments)
+
+    return merged_segments, full_text
+
+
+def find_coverage_gaps(segments, total_duration_sec, gap_threshold=5.0):
+    """
+    Detecta huecos en la transcripción donde no hay segmentos.
+
+    Args:
+        segments: lista de segmentos con start/end
+        total_duration_sec: duración total del audio en segundos
+        gap_threshold: segundos mínimos para considerar un hueco (default 5s)
+
+    Returns:
+        Lista de huecos {"start": float, "end": float, "duration": float}
+    """
+    if not segments:
+        return [{"start": 0, "end": total_duration_sec, "duration": total_duration_sec}]
+
+    gaps = []
+    sorted_segs = sorted(segments, key=lambda x: x["start"])
+
+    # Hueco al inicio
+    if sorted_segs[0]["start"] > gap_threshold:
+        gaps.append({
+            "start": 0,
+            "end": sorted_segs[0]["start"],
+            "duration": sorted_segs[0]["start"]
+        })
+
+    # Huecos entre segmentos
+    for i in range(len(sorted_segs) - 1):
+        gap_start = sorted_segs[i]["end"]
+        gap_end = sorted_segs[i + 1]["start"]
+        gap_duration = gap_end - gap_start
+        if gap_duration > gap_threshold:
+            gaps.append({
+                "start": gap_start,
+                "end": gap_end,
+                "duration": gap_duration
+            })
+
+    # Hueco al final
+    if sorted_segs and total_duration_sec - sorted_segs[-1]["end"] > gap_threshold:
+        gaps.append({
+            "start": sorted_segs[-1]["end"],
+            "end": total_duration_sec,
+            "duration": total_duration_sec - sorted_segs[-1]["end"]
+        })
+
+    return gaps
+
+
+def calculate_coverage(segments, total_duration_sec):
+    """Calcula el porcentaje de cobertura temporal de la transcripción."""
+    if not segments or total_duration_sec <= 0:
+        return 0.0
+
+    # Crear intervalos cubiertos y fusionar overlaps
+    intervals = sorted([(seg["start"], seg["end"]) for seg in segments])
+    merged = [intervals[0]]
+    for start, end in intervals[1:]:
+        if start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+
+    covered = sum(end - start for start, end in merged)
+    return min(100.0, (covered / total_duration_sec) * 100)
+
+
+def retranscribe_gaps(client, audio_segment, gaps, model, status_text=None):
+    """
+    Re-transcribe secciones del audio donde se detectaron huecos.
+
+    Args:
+        client: Groq client
+        audio_segment: pydub AudioSegment completo
+        gaps: lista de huecos detectados
+        model: modelo Whisper a usar
+        status_text: streamlit element para mostrar progreso
+
+    Returns:
+        Lista de segmentos recuperados de los huecos
+    """
+    recovered_segments = []
+
+    for gi, gap in enumerate(gaps):
+        if status_text:
+            status_text.write(f"🔄 Re-transcribiendo hueco {gi+1}/{len(gaps)}: "
+                            f"{fmt_time(gap['start'])} → {fmt_time(gap['end'])} "
+                            f"({gap['duration']:.0f}s)")
+
+        # Extraer la sección del audio con margen extra
+        margin_ms = 2000  # 2 segundos de margen
+        start_ms = max(0, int(gap["start"] * 1000) - margin_ms)
+        end_ms = min(len(audio_segment), int(gap["end"] * 1000) + margin_ms)
+
+        gap_audio = audio_segment[start_ms:end_ms]
+
+        # Exportar
+        gap_path = os.path.join(tempfile.gettempdir(), f"gap_{gi}.mp3")
+        gap_audio.export(gap_path, format="mp3", bitrate="128k")
+
+        # Transcribir con reintentos
+        text, segments, error = transcribe_single(client, gap_path, model, max_retries=3)
+
+        if segments:
+            # Ajustar timestamps al tiempo absoluto
+            offset_sec = start_ms / 1000.0
+            for seg in segments:
+                seg["start"] += offset_sec
+                seg["end"] += offset_sec
+                seg["recovered"] = True  # Marcar como recuperado
+            recovered_segments.extend(segments)
+
+        # Limpiar
+        try:
+            os.remove(gap_path)
+        except Exception:
+            pass
+
+    return recovered_segments
+
+
+def transcribe_complete(client, path, model, progress_status=None):
+    """
+    Pipeline completo de transcripción que garantiza cobertura total.
+
+    1. Obtener duración del audio
+    2. Si es grande, dividir en chunks con overlap
+    3. Transcribir cada chunk con reintentos
+    4. Fusionar resultados eliminando duplicados
+    5. Verificar cobertura
+    6. Re-transcribir huecos detectados
+    7. Fusionar segmentos recuperados
+
+    Returns:
+        (full_text, segments, audio_duration_ms, coverage_pct, gaps, chunks_used)
+    """
+    # Paso 1: Obtener duración y cargar audio
+    if progress_status:
+        progress_status.write("📏 Analizando audio...")
+
+    duration_ms, audio_segment = get_audio_duration_ms(path)
+
+    if duration_ms is None or audio_segment is None:
+        # Fallback: transcripción directa sin pydub
+        if progress_status:
+            progress_status.write("⚠️ pydub no disponible, transcripción directa...")
+
+        text, segments, error = transcribe_single(client, path, model)
+        if error:
+            return None, None, 0, 0, [], 1
+        duration_sec = max(seg["end"] for seg in segments) if segments else 0
+        coverage = calculate_coverage(segments, duration_sec)
+        return text, segments, int(duration_sec * 1000), coverage, [], 1
+
+    duration_sec = duration_ms / 1000.0
+    if progress_status:
+        progress_status.write(f"⏱️ Duración: {fmt_duration(duration_sec)}")
+
+    # Paso 2: Dividir en chunks si es necesario
+    # Chunk de 10 minutos con 15 segundos de overlap
+    chunk_duration_ms = 600_000  # 10 minutos
+    overlap_ms = 15_000  # 15 segundos
+
+    chunks = split_audio_chunks(audio_segment, chunk_duration_ms, overlap_ms)
+    n_chunks = len(chunks)
+
+    if progress_status:
+        if n_chunks > 1:
+            progress_status.write(f"✂️ Audio dividido en {n_chunks} segmentos")
+        else:
+            progress_status.write("📦 Audio en un solo segmento")
+
+    # Paso 3: Transcribir cada chunk
+    all_results = []
+    errors = []
+
+    for ci, chunk in enumerate(chunks):
+        if progress_status:
+            progress_status.write(
+                f"🎧 Transcribiendo segmento {ci+1}/{n_chunks} "
+                f"({fmt_time(chunk['start_ms']/1000)} → {fmt_time(chunk['end_ms']/1000)})..."
+            )
+
+        text, segments, error = transcribe_single(client, chunk["path"], model)
+
+        if error:
+            errors.append(f"Chunk {ci+1}: {error}")
+            if progress_status:
+                progress_status.write(f"⚠️ Error en segmento {ci+1}: {error}")
+        else:
+            all_results.append({
+                "text": text,
+                "segments": segments,
+                "start_ms": chunk["start_ms"],
+                "end_ms": chunk["end_ms"],
+                "index": ci
+            })
+
+        # Limpiar archivo temporal del chunk
+        try:
+            os.remove(chunk["path"])
+        except Exception:
+            pass
+
+    if not all_results:
+        return None, None, duration_ms, 0, [], n_chunks
+
+    # Paso 4: Fusionar resultados
+    if progress_status:
+        progress_status.write("🔗 Fusionando segmentos...")
+
+    merged_segments, full_text = merge_chunk_segments(all_results, overlap_ms)
+
+    # Paso 5: Verificar cobertura
+    coverage = calculate_coverage(merged_segments, duration_sec)
+    gaps = find_coverage_gaps(merged_segments, duration_sec, gap_threshold=5.0)
+
+    if progress_status:
+        progress_status.write(f"📊 Cobertura inicial: {coverage:.1f}%")
+
+    # Paso 6: Re-transcribir huecos significativos
+    if gaps and coverage < 98.0:
+        significant_gaps = [g for g in gaps if g["duration"] >= 3.0]  # Huecos de 3+ segundos
+
+        if significant_gaps and progress_status:
+            progress_status.write(
+                f"🔍 Detectados {len(significant_gaps)} huecos, re-transcribiendo..."
+            )
+
+        if significant_gaps:
+            recovered = retranscribe_gaps(
+                client, audio_segment, significant_gaps, model, progress_status
+            )
+
+            if recovered:
+                # Paso 7: Fusionar segmentos recuperados
+                merged_segments.extend(recovered)
+                merged_segments.sort(key=lambda x: x["start"])
+
+                # Eliminar duplicados que pudieran surgir
+                deduped = []
+                for seg in merged_segments:
+                    is_dup = False
+                    for existing in deduped[-5:]:
+                        if abs(seg["start"] - existing["start"]) < 1.0:
+                            ratio = SequenceMatcher(
+                                None, norm(seg["text"]), norm(existing["text"])
+                            ).ratio()
+                            if ratio > 0.7:
+                                is_dup = True
+                                break
+                    if not is_dup:
+                        deduped.append(seg)
+                merged_segments = deduped
+
+                # Reconstruir texto
+                full_text = " ".join(seg["text"] for seg in merged_segments)
+
+                # Recalcular cobertura
+                coverage = calculate_coverage(merged_segments, duration_sec)
+                gaps = find_coverage_gaps(merged_segments, duration_sec, gap_threshold=5.0)
+
+                if progress_status:
+                    progress_status.write(
+                        f"✅ Cobertura después de recuperación: {coverage:.1f}% "
+                        f"(+{len(recovered)} segmentos recuperados)"
+                    )
+
+    return full_text, merged_segments, duration_ms, coverage, gaps, n_chunks
 
 
 # --- CORRECCIÓN ---
@@ -387,7 +929,7 @@ def correct_and_align(client, raw_text, segments):
 
 
 # --- BÚSQUEDA ---
-def search_segments(query, segments, corrected_segments, context_words=20, fuzzy_thresh=0.75):
+def search_segments(query, segments, corrected_segments, context_words=30, fuzzy_thresh=0.75):
     if not query:
         return []
     target = corrected_segments if corrected_segments else segments
@@ -408,11 +950,21 @@ def search_segments(query, segments, corrected_segments, context_words=20, fuzzy
     search_norm = [norm(w) for w, _ in all_words]
     found = []
 
+    # Búsqueda exacta de frase
     for i in range(len(search_norm) - len(q_words) + 1):
         window = " ".join(search_norm[i:i + len(q_words)])
         if q_norm in window:
             found.append({"pos": i, "len": len(q_words), "conf": "high", "score": 1.0, "seg": all_words[i][1]})
 
+    # Búsqueda por palabras individuales
+    if not found:
+        for i, wn in enumerate(search_norm):
+            for qw in q_words:
+                if len(qw) > 2 and qw in wn:
+                    found.append({"pos": i, "len": 1, "conf": "high", "score": 0.95, "seg": all_words[i][1]})
+                    break
+
+    # Búsqueda fuzzy
     if not found and fuzzy_thresh < 1.0:
         offset = 0
         for si, seg in enumerate(target):
@@ -433,6 +985,7 @@ def search_segments(query, segments, corrected_segments, context_words=20, fuzzy
         seen.add(fp["seg"])
         seg = target[fp["seg"]]
         p, ln = fp["pos"], fp["len"]
+
         cs = max(0, p - context_words)
         ce = min(len(all_words), p + ln + context_words)
         me = min(p + ln, len(all_words))
@@ -441,15 +994,34 @@ def search_segments(query, segments, corrected_segments, context_words=20, fuzzy
         match = " ".join(all_words[j][0] for j in range(p, me))
         after = " ".join(all_words[j][0] for j in range(me, ce))
 
+        full_segment_text = seg.get("text", "")
+        prev_seg_text = target[fp["seg"] - 1].get("text", "") if fp["seg"] > 0 else ""
+        next_seg_text = target[fp["seg"] + 1].get("text", "") if fp["seg"] < len(target) - 1 else ""
+
         results.append({
             "start_time": float(seg.get("start", 0)),
+            "end_time": float(seg.get("end", 0)),
             "time_label": fmt_time(float(seg.get("start", 0))),
+            "end_label": fmt_time(float(seg.get("end", 0))),
             "before": before, "match_hl": highlight_html(match, query),
             "after": after, "confidence": fp["conf"],
             "score": fp["score"], "idx": fp["seg"],
+            "full_segment": full_segment_text,
+            "prev_segment": prev_seg_text,
+            "next_segment": next_seg_text,
         })
     results.sort(key=lambda x: x["score"], reverse=True)
     return results
+
+
+def execute_search():
+    query = st.session_state.get("q_input", "").strip()
+    if query:
+        st.session_state.last_search_query = query
+        st.session_state._search_pending = True
+    else:
+        st.session_state.search_results = None
+        st.session_state.last_search_query = ""
 
 
 def reset_search():
@@ -464,7 +1036,6 @@ def reset_all():
 
 
 def build_timestamped_transcript(segments):
-    """Construye transcripción con timestamps para el contexto del chat."""
     lines = []
     for seg in segments:
         t = fmt_time(float(seg.get("start", 0)))
@@ -474,11 +1045,99 @@ def build_timestamped_transcript(segments):
     return "\n".join(lines)
 
 
+def get_audio_duration(segments):
+    if not segments:
+        return 0
+    return max(float(seg.get("end", 0)) for seg in segments)
+
+
+# --- ANÁLISIS IA ---
+def ai_generate(client, system_prompt, user_content, max_tokens=2048, temp=0.1):
+    try:
+        r = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content}
+            ],
+            temperature=temp, max_tokens=max_tokens
+        )
+        return r.choices[0].message.content.strip()
+    except Exception as e:
+        return f"Error: {e}"
+
+
+def generate_summary(client, text):
+    cache_key = "summary"
+    if cache_key in st.session_state.analysis_cache:
+        return st.session_state.analysis_cache[cache_key]
+    system = (
+        "Eres un asistente experto en crear resúmenes claros y estructurados en español. "
+        "Genera un resumen ejecutivo del siguiente texto transcrito de un audio. "
+        "Estructura tu respuesta así:\n"
+        "## Resumen Ejecutivo\nUn párrafo conciso con la idea principal.\n\n"
+        "## Puntos Clave\nLista con viñetas de los puntos más importantes (máximo 7).\n\n"
+        "## Conclusiones\nConclusiones principales o mensajes clave."
+    )
+    result = ai_generate(client, system, text[:12000])
+    st.session_state.analysis_cache[cache_key] = result
+    return result
+
+
+def generate_topics(client, text):
+    cache_key = "topics"
+    if cache_key in st.session_state.analysis_cache:
+        return st.session_state.analysis_cache[cache_key]
+    system = (
+        "Eres un analizador de contenido experto. Analiza la transcripción y extrae:\n"
+        "## Temas Principales\nLista los temas principales discutidos, con una breve descripción.\n\n"
+        "## Palabras Clave\nLas 10-15 palabras o frases clave más relevantes.\n\n"
+        "## Categoría del Contenido\nClasifica el tipo de contenido (conferencia, entrevista, reunión, etc.).\n\n"
+        "Responde en español."
+    )
+    result = ai_generate(client, system, text[:12000])
+    st.session_state.analysis_cache[cache_key] = result
+    return result
+
+
+def generate_action_items(client, text):
+    cache_key = "actions"
+    if cache_key in st.session_state.analysis_cache:
+        return st.session_state.analysis_cache[cache_key]
+    system = (
+        "Eres un asistente experto en extraer información accionable de transcripciones. "
+        "Analiza el texto y extrae:\n"
+        "## Tareas y Acciones Pendientes\nAcciones concretas mencionadas.\n\n"
+        "## Decisiones Tomadas\nDecisiones que se tomaron o acordaron.\n\n"
+        "## Preguntas Abiertas\nPreguntas que quedaron sin responder.\n\n"
+        "## Compromisos\nCompromisos asumidos por algún participante.\n\n"
+        "Si alguna sección no aplica, indícalo. Responde en español."
+    )
+    result = ai_generate(client, system, text[:12000])
+    st.session_state.analysis_cache[cache_key] = result
+    return result
+
+
+def generate_sentiment(client, text):
+    cache_key = "sentiment"
+    if cache_key in st.session_state.analysis_cache:
+        return st.session_state.analysis_cache[cache_key]
+    system = (
+        "Eres un experto en análisis de sentimiento y tono. Analiza la transcripción:\n"
+        "## Tono General\nDescribe el tono predominante.\n\n"
+        "## Sentimiento\nSentimiento general: Positivo, Negativo, Neutro o Mixto.\n\n"
+        "## Momentos Destacados\nFragmentos con carga emocional notable.\n\n"
+        "## Nivel de Formalidad\nEscala del 1-10 con justificación.\n\n"
+        "Responde en español."
+    )
+    result = ai_generate(client, system, text[:12000])
+    st.session_state.analysis_cache[cache_key] = result
+    return result
+
+
+# --- PROCESO PRINCIPAL ---
 def process_audio(client, uploaded, model, do_correct):
     size_mb = len(uploaded.getvalue()) / (1024 * 1024)
-    if size_mb > 25:
-        st.error(f"Archivo muy grande ({size_mb:.1f} MB). Máximo 25 MB.")
-        return False
 
     reset_all()
 
@@ -489,32 +1148,51 @@ def process_audio(client, uploaded, model, do_correct):
             return False
 
         st.session_state.audio_path = path
+        st.session_state.uploaded_filename = uploaded.name
         st.write(f"📁 {uploaded.name} — {size_mb:.1f} MB")
-        st.write("🎧 Transcribiendo...")
 
-        raw, segs = transcribe(client, path, model)
-        if not raw or not segs:
-            st.error("Error en la transcripción")
+        # Transcripción completa con segmentación y verificación
+        full_text, segments, duration_ms, coverage, gaps, chunks_used = transcribe_complete(
+            client, path, model, progress_status=status
+        )
+
+        if not full_text or not segments:
+            st.error("Error en la transcripción. Intenta con otro archivo o formato.")
             return False
 
-        st.session_state.raw_transcript = raw
-        st.session_state.transcript_segments = segs
+        st.session_state.raw_transcript = full_text
+        st.session_state.transcript_segments = segments
+        st.session_state.audio_duration_ms = duration_ms
+        st.session_state.coverage_pct = coverage
+        st.session_state.transcript_gaps = gaps
+        st.session_state.chunks_used = chunks_used
 
+        # Corrección ortográfica
         if do_correct:
             st.write("✨ Corrigiendo ortografía...")
-            txt, csegs = correct_and_align(client, raw, segs)
+            txt, csegs = correct_and_align(client, full_text, segments)
             st.session_state.transcript_text = txt
             st.session_state.corrected_segments = csegs
             st.session_state.correction_applied = True
         else:
-            st.session_state.transcript_text = raw
-            st.session_state.corrected_segments = segs
+            st.session_state.transcript_text = full_text
+            st.session_state.corrected_segments = segments
             st.session_state.correction_applied = False
 
         st.session_state.audio_start_time = 0
-        wc = len(raw.split())
-        sc = len(segs)
-        status.update(label=f"✅ {wc:,} palabras · {sc} segmentos", state="complete", expanded=False)
+
+        wc = len(full_text.split())
+        sc = len(segments)
+
+        # Resumen del estado
+        coverage_icon = "✅" if coverage >= 95 else "⚠️" if coverage >= 80 else "❌"
+        gap_info = f" · {len(gaps)} huecos" if gaps else ""
+        chunk_info = f" · {chunks_used} chunks" if chunks_used > 1 else ""
+
+        status.update(
+            label=f"{coverage_icon} {wc:,} palabras · {sc} segmentos · {coverage:.0f}% cobertura{gap_info}{chunk_info}",
+            state="complete", expanded=False
+        )
     return True
 
 
@@ -531,7 +1209,7 @@ def main_app():
         do_correct = st.toggle("Corrección ortográfica", value=True)
         st.markdown("---")
         st.markdown("##### 🔍 Búsqueda")
-        ctx_w = st.slider("Palabras contexto", 8, 40, 20, step=4)
+        ctx_w = st.slider("Palabras contexto", 10, 60, 30, step=5)
         use_fuzzy = st.toggle("Aproximada (fuzzy)", value=True)
         fuzzy_t = st.slider("Sensibilidad", 0.5, 1.0, 0.75, 0.05) if use_fuzzy else 1.0
         st.markdown("---")
@@ -559,7 +1237,7 @@ def main_app():
             <div class="empty-state">
                 <div class="empty-state-icon">📂</div>
                 <div class="empty-state-title">Sube un archivo de audio</div>
-                <div class="empty-state-text">MP3, WAV, M4A, OGG o MP4 — Máximo 25 MB</div>
+                <div class="empty-state-text">MP3, WAV, M4A, OGG o MP4 — Sin límite de duración</div>
             </div>
             """, unsafe_allow_html=True)
 
@@ -578,50 +1256,102 @@ def main_app():
         st.audio(st.session_state.audio_path, start_time=int(max(0, st.session_state.audio_start_time)))
 
     txt = st.session_state.transcript_text
+    segs = st.session_state.corrected_segments or []
     n_words = len(txt.split())
-    n_segs = len(st.session_state.corrected_segments or [])
+    n_segs = len(segs)
+    duration = get_audio_duration(segs)
+    coverage = st.session_state.coverage_pct
+    gaps = st.session_state.transcript_gaps
+    chunks_used = st.session_state.chunks_used
+
     corr_chip = "stat-chip stat-chip-ok" if st.session_state.correction_applied else "stat-chip"
     corr_text = "✓ Corregido" if st.session_state.correction_applied else "Original"
+
+    # Chip de cobertura
+    if coverage >= 95:
+        cov_chip = "stat-chip stat-chip-ok"
+        cov_icon = "✅"
+    elif coverage >= 80:
+        cov_chip = "stat-chip stat-chip-warn"
+        cov_icon = "⚠️"
+    else:
+        cov_chip = "stat-chip"
+        cov_icon = "❌"
+
+    filename_display = st.session_state.uploaded_filename or "audio"
+    chunk_html = f'<span class="stat-chip">✂️ <strong>{chunks_used}</strong> chunks</span>' if chunks_used > 1 else ""
+    gap_html = f'<span class="stat-chip stat-chip-warn">🕳️ <strong>{len(gaps)}</strong> huecos</span>' if gaps else ""
+
     st.markdown(f"""
     <div class="stats-bar">
+        <span class="stat-chip">📁 <strong>{filename_display}</strong></span>
+        <span class="stat-chip">⏱️ <strong>{fmt_duration(duration)}</strong></span>
         <span class="stat-chip"><strong>{n_words:,}</strong> palabras</span>
         <span class="stat-chip"><strong>{n_segs}</strong> segmentos</span>
+        <span class="{cov_chip}">{cov_icon} <strong>{coverage:.0f}%</strong> cobertura</span>
         <span class="{corr_chip}">{corr_text}</span>
+        {chunk_html}
+        {gap_html}
     </div>
     """, unsafe_allow_html=True)
 
-    tab_search, tab_chat, tab_export = st.tabs(["🔍 Búsqueda", "💬 Chat IA", "📥 Exportar"])
+    # Barra visual de cobertura
+    if coverage < 100:
+        cov_class = "coverage-ok" if coverage >= 95 else "coverage-warn" if coverage >= 80 else "coverage-bad"
+        st.markdown(f"""
+        <div class="coverage-bar-container">
+            <div class="coverage-bar-fill {cov_class}" style="width:{coverage}%">{coverage:.1f}%</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    tab_search, tab_chat, tab_analysis, tab_export = st.tabs([
+        "🔍 Búsqueda", "💬 Chat IA", "📊 Análisis", "📥 Exportar"
+    ])
 
     # ===== BÚSQUEDA =====
     with tab_search:
-        c1, c2 = st.columns([6, 1])
-        with c1:
-            query = st.text_input(
-                "q", placeholder="Buscar palabra o frase...",
-                label_visibility="collapsed", key="q_input"
-            )
-        with c2:
-            do_search = st.button("Buscar", type="primary", use_container_width=True)
+        query = st.text_input(
+            "q", placeholder="Buscar palabra o frase... (Enter para buscar)",
+            label_visibility="collapsed", key="q_input",
+            on_change=execute_search
+        )
 
-        if do_search and query:
-            st.session_state.last_search_query = query
+        if st.session_state.get("_search_pending"):
+            sq = st.session_state.last_search_query
             st.session_state.search_results = search_segments(
-                query, st.session_state.transcript_segments,
+                sq, st.session_state.transcript_segments,
                 st.session_state.corrected_segments,
                 context_words=ctx_w, fuzzy_thresh=fuzzy_t if use_fuzzy else 1.0
             )
-        elif do_search and not query:
-            reset_search()
+            st.session_state._search_pending = False
 
         aq = st.session_state.last_search_query
         res = st.session_state.search_results
 
         if aq and res:
-            st.caption(f"**{len(res)}** resultado{'s' if len(res) != 1 else ''} para \"{aq}\"")
+            total_occurrences = count_occurrences(txt, aq)
+            st.caption(
+                f"**{len(res)}** resultado{'s' if len(res) != 1 else ''} "
+                f"({total_occurrences} ocurrencia{'s' if total_occurrences != 1 else ''}) "
+                f"para \"{aq}\""
+            )
             for i, r in enumerate(res):
                 badge_cls = f"sr-badge-{r['confidence']}"
                 bh = f"<span class='sr-ctx'>...{r['before']} </span>" if r['before'] else ""
                 ah = f"<span class='sr-ctx'> {r['after']}...</span>" if r['after'] else ""
+
+                expanded_ctx = ""
+                if r.get('prev_segment') or r.get('next_segment'):
+                    prev_hl = highlight_html(r['prev_segment'], aq) if r.get('prev_segment') else ""
+                    next_hl = highlight_html(r['next_segment'], aq) if r.get('next_segment') else ""
+                    ctx_parts = []
+                    if prev_hl:
+                        ctx_parts.append(f"<span class='sr-ctx'>↑ {prev_hl}</span>")
+                    if next_hl:
+                        ctx_parts.append(f"<span class='sr-ctx'>↓ {next_hl}</span>")
+                    if ctx_parts:
+                        expanded_ctx = f"<div class='sr-segment-full'>{'<br>'.join(ctx_parts)}</div>"
+
                 rc1, rc2 = st.columns([0.6, 5])
                 with rc1:
                     if st.button(f"▶ {r['time_label']}", key=f"p_{i}_{r['idx']}"):
@@ -631,12 +1361,14 @@ def main_app():
                     st.markdown(f"""
                     <div class="sr-card">
                         <div class="sr-head">
-                            <span class="sr-time">{r['time_label']}</span>
+                            <span class="sr-time">{r['time_label']} → {r['end_label']}</span>
                             <span class="sr-badge {badge_cls}">{r['confidence']}</span>
                         </div>
                         <div class="sr-body">{bh}{r['match_hl']}{ah}</div>
+                        {expanded_ctx}
                     </div>
                     """, unsafe_allow_html=True)
+
         elif aq and res is not None and len(res) == 0:
             st.markdown("""
             <div class="no-results-box">
@@ -644,14 +1376,32 @@ def main_app():
             </div>
             """, unsafe_allow_html=True)
 
-        # Texto completo - SIN expander para evitar el texto "arrow" fantasma
+        # Texto completo siempre visible con resaltado
         st.markdown("---")
-        show_full = st.checkbox("📄 Mostrar texto completo", value=not bool(aq), key="show_full_text")
-        if show_full:
-            hl_text = highlight_html(txt, aq) if aq else txt
-            st.markdown(f"<div class='full-text-box'>{hl_text}</div>", unsafe_allow_html=True)
+        st.markdown("##### 📄 Texto completo")
 
-        # Nuevo archivo - SIN expander
+        if aq:
+            total_in_text = count_occurrences(txt, aq)
+            if total_in_text > 0:
+                st.caption(f"🔶 {total_in_text} ocurrencia{'s' if total_in_text != 1 else ''} resaltada{'s' if total_in_text != 1 else ''}")
+            hl_text = highlight_full_text(txt, aq)
+        else:
+            hl_text = txt
+
+        st.markdown(f"<div class='full-text-box'>{hl_text}</div>", unsafe_allow_html=True)
+
+        # Huecos detectados
+        if gaps:
+            st.markdown("---")
+            with st.expander(f"⚠️ {len(gaps)} hueco{'s' if len(gaps) != 1 else ''} detectado{'s' if len(gaps) != 1 else ''} en la transcripción", expanded=False):
+                st.caption("Secciones del audio donde no se detectó habla (posible silencio, música o ruido)")
+                for gi, gap in enumerate(gaps):
+                    st.markdown(
+                        f"`{fmt_time(gap['start'])}` → `{fmt_time(gap['end'])}` "
+                        f"— **{gap['duration']:.1f}s** sin transcripción"
+                    )
+
+        # Nuevo archivo
         st.markdown("---")
         show_new = st.checkbox("📂 Transcribir otro archivo", value=False, key="show_new_upload")
         if show_new:
@@ -687,10 +1437,8 @@ def main_app():
                 ph = st.empty()
                 full = ""
                 try:
-                    # Construir contexto con timestamps
                     segs_for_ctx = st.session_state.corrected_segments or st.session_state.transcript_segments or []
                     timestamped_ctx = build_timestamped_transcript(segs_for_ctx)
-                    # Limitar a ~15000 chars
                     if len(timestamped_ctx) > 15000:
                         timestamped_ctx = timestamped_ctx[:15000] + "\n[...transcripción truncada...]"
 
@@ -724,17 +1472,130 @@ def main_app():
                 except Exception as e:
                     st.error(f"Error: {e}")
 
+        if st.session_state.chat_history:
+            if st.button("🗑️ Limpiar conversación", use_container_width=False):
+                st.session_state.chat_history = []
+                st.rerun()
+
+    # ===== ANÁLISIS =====
+    with tab_analysis:
+        st.markdown("##### 📊 Análisis Inteligente")
+
+        chars = len(txt)
+        sentences = len(re.split(r'[.!?]+', txt))
+        avg_word_len = round(sum(len(w) for w in txt.split()) / max(n_words, 1), 1)
+        wpm = round(n_words / max(duration / 60, 1))
+
+        st.markdown(f"""
+        <div class="kpi-grid">
+            <div class="kpi-card"><div class="kpi-value">{n_words:,}</div><div class="kpi-label">Palabras</div></div>
+            <div class="kpi-card"><div class="kpi-value">{sentences}</div><div class="kpi-label">Oraciones</div></div>
+            <div class="kpi-card"><div class="kpi-value">{chars:,}</div><div class="kpi-label">Caracteres</div></div>
+            <div class="kpi-card"><div class="kpi-value">{wpm}</div><div class="kpi-label">Palabras/min</div></div>
+            <div class="kpi-card"><div class="kpi-value">{fmt_duration(duration)}</div><div class="kpi-label">Duración</div></div>
+            <div class="kpi-card"><div class="kpi-value">{coverage:.0f}%</div><div class="kpi-label">Cobertura</div></div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        st.markdown("---")
+
+        an_col1, an_col2 = st.columns(2)
+
+        with an_col1:
+            if st.button("📝 Generar Resumen", use_container_width=True, type="primary"):
+                with st.spinner("Generando resumen..."):
+                    st.session_state.analysis_cache["summary"] = generate_summary(client, txt)
+            if "summary" in st.session_state.analysis_cache:
+                with st.expander("📝 Resumen", expanded=True):
+                    st.markdown(st.session_state.analysis_cache["summary"])
+
+        with an_col2:
+            if st.button("🏷️ Extraer Temas", use_container_width=True, type="primary"):
+                with st.spinner("Extrayendo temas..."):
+                    st.session_state.analysis_cache["topics"] = generate_topics(client, txt)
+            if "topics" in st.session_state.analysis_cache:
+                with st.expander("🏷️ Temas", expanded=True):
+                    st.markdown(st.session_state.analysis_cache["topics"])
+
+        st.markdown("---")
+
+        an_col3, an_col4 = st.columns(2)
+
+        with an_col3:
+            if st.button("✅ Tareas y Decisiones", use_container_width=True):
+                with st.spinner("Extrayendo acciones..."):
+                    st.session_state.analysis_cache["actions"] = generate_action_items(client, txt)
+            if "actions" in st.session_state.analysis_cache:
+                with st.expander("✅ Tareas y Decisiones", expanded=True):
+                    st.markdown(st.session_state.analysis_cache["actions"])
+
+        with an_col4:
+            if st.button("🎭 Análisis de Tono", use_container_width=True):
+                with st.spinner("Analizando tono..."):
+                    st.session_state.analysis_cache["sentiment"] = generate_sentiment(client, txt)
+            if "sentiment" in st.session_state.analysis_cache:
+                with st.expander("🎭 Análisis de Tono", expanded=True):
+                    st.markdown(st.session_state.analysis_cache["sentiment"])
+
+        # Palabras frecuentes
+        st.markdown("---")
+        st.markdown("##### 📈 Palabras más frecuentes")
+
+        stopwords_es = {
+            'de', 'la', 'que', 'el', 'en', 'y', 'a', 'los', 'del', 'se', 'las', 'por',
+            'un', 'para', 'con', 'no', 'una', 'su', 'al', 'lo', 'como', 'más', 'pero',
+            'sus', 'le', 'ya', 'o', 'este', 'sí', 'porque', 'esta', 'entre', 'cuando',
+            'muy', 'sin', 'sobre', 'también', 'me', 'hasta', 'hay', 'donde', 'quien',
+            'desde', 'todo', 'nos', 'durante', 'todos', 'uno', 'les', 'ni', 'contra',
+            'otros', 'ese', 'eso', 'ante', 'ellos', 'esto', 'antes', 'algunos',
+            'qué', 'unos', 'yo', 'otro', 'otras', 'otra', 'él', 'tanto', 'esa', 'estos',
+            'mucho', 'quienes', 'nada', 'muchos', 'cual', 'poco', 'ella', 'estar', 'estas',
+            'algunas', 'algo', 'nosotros', 'mi', 'mis', 'tú', 'te', 'ti', 'tu', 'tus',
+            'ellas', 'nosotras', 'vosotros', 'vosotras', 'os',
+            'es', 'son', 'fue', 'ser', 'ha', 'han', 'era', 'sido', 'tiene',
+            'puede', 'hacer', 'cada', 'hemos', 'vamos', 'va',
+            'así', 'pues', 'bueno', 'entonces', 'después', 'ahora', 'aquí', 'bien',
+            'sólo', 'solo', 'vez', 'esas', 'dos', 'tres', 'mas', 'sea',
+            'si', 'he', 'tal', 'esos', 'tan',
+        }
+
+        words_clean = re.findall(r'\b[a-záéíóúñü]{3,}\b', txt.lower())
+        word_freq = {}
+        for w in words_clean:
+            if w not in stopwords_es:
+                word_freq[w] = word_freq.get(w, 0) + 1
+
+        top_words = sorted(word_freq.items(), key=lambda x: x[1], reverse=True)[:20]
+
+        if top_words:
+            max_freq = top_words[0][1]
+            word_bars = []
+            for word, freq in top_words:
+                pct = (freq / max_freq) * 100
+                word_bars.append(
+                    f"<div style='display:flex;align-items:center;gap:8px;margin:3px 0;font-size:0.78rem'>"
+                    f"<span style='width:100px;font-weight:500;color:var(--text)'>{word}</span>"
+                    f"<div style='flex:1;background:var(--bg);border-radius:4px;height:18px;overflow:hidden'>"
+                    f"<div style='width:{pct}%;background:linear-gradient(90deg,#fed7aa,#ea580c);height:100%;border-radius:4px'></div>"
+                    f"</div>"
+                    f"<span style='width:30px;text-align:right;color:var(--text-secondary);font-size:0.72rem'>{freq}</span>"
+                    f"</div>"
+                )
+            st.markdown("".join(word_bars), unsafe_allow_html=True)
+
     # ===== EXPORTAR =====
     with tab_export:
-        c1, c2 = st.columns(2)
+        st.markdown("##### 📥 Exportar Transcripción")
+
+        c1, c2, c3 = st.columns(3)
         with c1:
             st.download_button(
-                "📄 Texto (.txt)", data=txt, file_name="transcripcion.txt",
+                "📄 Texto plano (.txt)", data=txt, file_name="transcripcion.txt",
                 mime="text/plain", use_container_width=True
             )
         with c2:
             srt = []
-            for i, seg in enumerate(st.session_state.corrected_segments or []):
+            for i, seg in enumerate(segs):
                 s, e = float(seg.get("start", 0)), float(seg.get("end", 0))
                 srt.append(f"{i+1}")
                 srt.append(f"{int(s//3600):02d}:{int((s%3600)//60):02d}:{s%60:06.3f} --> "
@@ -745,10 +1606,67 @@ def main_app():
                 "🎬 Subtítulos (.srt)", data="\n".join(srt) or "Sin datos",
                 file_name="transcripcion.srt", mime="text/plain", use_container_width=True
             )
-        show_ts = st.checkbox("Ver con timestamps", value=False, key="show_timestamps")
+        with c3:
+            ts_lines = []
+            for seg in segs:
+                t = fmt_time(float(seg.get("start", 0)))
+                ts_lines.append(f"[{t}] {seg.get('text', '')}")
+            st.download_button(
+                "⏱️ Con timestamps (.txt)", data="\n".join(ts_lines),
+                file_name="transcripcion_timestamps.txt", mime="text/plain", use_container_width=True
+            )
+
+        st.markdown("---")
+
+        c4, c5 = st.columns(2)
+        with c4:
+            json_data = {
+                "filename": st.session_state.uploaded_filename,
+                "date": datetime.now().isoformat(),
+                "duration_seconds": duration,
+                "word_count": n_words,
+                "coverage_percent": coverage,
+                "chunks_used": chunks_used,
+                "gaps": gaps,
+                "correction_applied": st.session_state.correction_applied,
+                "full_text": txt,
+                "segments": segs,
+            }
+            st.download_button(
+                "🗂️ Datos completos (.json)",
+                data=json.dumps(json_data, ensure_ascii=False, indent=2),
+                file_name="transcripcion.json", mime="application/json", use_container_width=True
+            )
+        with c5:
+            if st.session_state.analysis_cache:
+                analysis_export = {
+                    "filename": st.session_state.uploaded_filename,
+                    "date": datetime.now().isoformat(),
+                    "analyses": st.session_state.analysis_cache,
+                }
+                st.download_button(
+                    "📊 Exportar análisis (.json)",
+                    data=json.dumps(analysis_export, ensure_ascii=False, indent=2),
+                    file_name="analisis.json", mime="application/json", use_container_width=True
+                )
+            else:
+                st.button("📊 Exportar análisis", disabled=True, use_container_width=True,
+                          help="Genera al menos un análisis primero")
+
+        st.markdown("---")
+        show_ts = st.checkbox("Ver transcripción con timestamps", value=False, key="show_timestamps")
         if show_ts:
-            for seg in (st.session_state.corrected_segments or []):
-                st.markdown(f"`{fmt_time(float(seg.get('start',0)))}` {seg.get('text','')}")
+            for seg in segs:
+                t_start = fmt_time(float(seg.get('start', 0)))
+                sc1, sc2 = st.columns([0.8, 5])
+                with sc1:
+                    st.caption(f"`{t_start}`")
+                with sc2:
+                    recovered_tag = " 🔄" if seg.get("recovered") else ""
+                    st.markdown(
+                        f"<span style='font-size:0.83rem'>{seg.get('text','')}{recovered_tag}</span>",
+                        unsafe_allow_html=True
+                    )
 
 
 if __name__ == "__main__":
