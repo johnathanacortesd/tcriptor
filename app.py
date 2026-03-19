@@ -661,6 +661,93 @@ def save_uploaded(f):
         return None
 
 
+def convert_to_mp3(input_path, status_writer=None):
+    """
+    Convierte cualquier formato (MP4, WAV, M4A, OGG…) a MP3 mono 64k
+    usando ffmpeg directamente. Esto:
+      - Extrae solo el audio de un MP4 (descarta el video)
+      - Reduce drásticamente el tamaño (100 MB MP4 → ~8-12 MB MP3)
+      - Normaliza el formato para que pydub y la API lo lean sin problemas
+
+    Retorna la ruta del MP3 resultante, o input_path si ya es MP3 pequeño.
+    """
+    import shutil
+
+    # Si ya es MP3 y pesa menos de 24 MB, no hace falta convertir
+    ext = os.path.splitext(input_path)[1].lower()
+    size_mb = os.path.getsize(input_path) / (1024 * 1024)
+    if ext == ".mp3" and size_mb < 24:
+        return input_path, False  # (path, was_converted)
+
+    # Buscar ffmpeg
+    ffmpeg_bin = shutil.which("ffmpeg")
+    if not ffmpeg_bin:
+        for candidate in ["/usr/bin/ffmpeg", "/usr/local/bin/ffmpeg"]:
+            if os.path.isfile(candidate):
+                ffmpeg_bin = candidate
+                break
+
+    if not ffmpeg_bin:
+        # Sin ffmpeg no podemos convertir — devolver el original e intentar igual
+        return input_path, False
+
+    out_path = input_path.rsplit(".", 1)[0] + "_converted.mp3"
+
+    if status_writer:
+        status_writer.write(
+            f"🔄 Convirtiendo a MP3 ({size_mb:.0f} MB → ~{size_mb * 0.08:.0f}-{size_mb * 0.12:.0f} MB estimado)..."
+        )
+
+    import subprocess
+    cmd = [
+        ffmpeg_bin,
+        "-y",                  # sobreescribir sin preguntar
+        "-i", input_path,      # archivo de entrada (cualquier formato)
+        "-vn",                 # descartar video
+        "-acodec", "libmp3lame",
+        "-ac", "1",            # mono (reduce 50% vs estéreo, suficiente para voz)
+        "-ar", "16000",        # 16 kHz — óptimo para reconocimiento de voz
+        "-b:a", "64k",         # 64 kbps — balance calidad/tamaño para voz
+        "-af", "aresample=16000,volume=1.5",  # resamplear + subir volumen levemente
+        out_path
+    ]
+
+    try:
+        result = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=300          # máximo 5 min para convertir
+        )
+        if result.returncode != 0:
+            # ffmpeg falló — intentar con configuración mínima sin filtros
+            cmd_fallback = [
+                ffmpeg_bin, "-y", "-i", input_path,
+                "-vn", "-acodec", "libmp3lame", "-ac", "1", "-b:a", "64k",
+                out_path
+            ]
+            result2 = subprocess.run(
+                cmd_fallback,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=300
+            )
+            if result2.returncode != 0:
+                return input_path, False  # conversión falló, usar original
+
+        new_size_mb = os.path.getsize(out_path) / (1024 * 1024)
+        if status_writer:
+            status_writer.write(f"✅ Convertido: {size_mb:.1f} MB → {new_size_mb:.1f} MB")
+        return out_path, True
+
+    except subprocess.TimeoutExpired:
+        if status_writer:
+            status_writer.write("⚠️ Conversión tardó demasiado, usando archivo original")
+        return input_path, False
+    except Exception:
+        return input_path, False
+
+
 def get_audio_info(path):
     ok, _ = check_pydub_ffmpeg()
     if not ok:
@@ -1276,14 +1363,10 @@ def generate_sentiment(client, text):
 
 def process_audio(client, uploaded, model, do_correct):
     """Procesa un audio nuevo y lo guarda en el historial."""
-    # Guardar el audio activo actual antes de crear uno nuevo
     history_save_current()
 
-    # Crear nuevo ID
     new_id = history_new_id()
     st.session_state.active_audio_id = new_id
-
-    # Reset del estado de audio actual
     reset_current_audio()
 
     with st.status("Procesando audio...", expanded=True) as status:
@@ -1293,16 +1376,43 @@ def process_audio(client, uploaded, model, do_correct):
             return False
 
         size_mb = os.path.getsize(path) / (1024 * 1024)
-        st.session_state.audio_path = path
-        st.session_state.uploaded_filename = uploaded.name
         st.write(f"📁 {uploaded.name} — {size_mb:.1f} MB")
+        st.session_state.uploaded_filename = uploaded.name
+
+        # ── PRE-CONVERSIÓN A MP3 ──────────────────────────────────
+        # Convierte MP4/WAV/M4A/OGG pesados a MP3 mono 16kHz antes
+        # de intentar la transcripción. Esto:
+        #   • Extrae solo el audio de un MP4 (descarta video)
+        #   • Reduce 100 MB → ~8-12 MB (voz: 64kbps mono 16kHz)
+        #   • Evita el error "archivo muy grande" de la API de Groq
+        # Si la conversión falla, continúa con el archivo original.
+        converted_path, was_converted = convert_to_mp3(path, status_writer=status)
+        if was_converted:
+            converted_size_mb = os.path.getsize(converted_path) / (1024 * 1024)
+            st.write(f"🎵 Audio listo: {converted_size_mb:.1f} MB")
+
+        # El reproductor muestra el archivo original (MP4 si aplica)
+        st.session_state.audio_path = path
+
+        # La transcripción usa el archivo convertido (MP3 compacto)
+        transcription_path = converted_path
 
         full_text, segments, duration_ms, coverage, gaps, chunks_used = transcribe_complete(
-            client, path, model, progress_status=status
+            client, transcription_path, model, progress_status=status
         )
 
+        # Limpiar archivo convertido temporal (no el original que usa el reproductor)
+        if was_converted and converted_path != path:
+            try:
+                os.remove(converted_path)
+            except Exception:
+                pass
+
         if not full_text or not segments:
-            st.error("Error en la transcripción.")
+            st.error(
+                "Error en la transcripción. "
+                "Si el archivo es muy largo, intenta con un fragmento más corto."
+            )
             return False
 
         st.session_state.raw_transcript = full_text
@@ -1326,12 +1436,12 @@ def process_audio(client, uploaded, model, do_correct):
         st.session_state.audio_start_time = 0
         wc = len(full_text.split())
         cov_icon = "✅" if coverage >= 95 else "⚠️" if coverage >= 80 else "❌"
+        chunk_info = f" · {chunks_used} partes" if chunks_used > 1 else ""
         status.update(
-            label=f"{cov_icon} {wc:,} palabras · {len(segments)} segmentos · {coverage:.0f}% cobertura",
+            label=f"{cov_icon} {wc:,} palabras · {len(segments)} segmentos · {coverage:.0f}% cobertura{chunk_info}",
             state="complete", expanded=False
         )
 
-    # Guardar en historial inmediatamente
     history_save_current()
     return True
 
