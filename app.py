@@ -1499,7 +1499,7 @@ def main_app():
     <div class="app-bar">
         <div class="app-bar-left">
             <div class="app-logo">🎙️</div>
-            <span class="app-name">Transcriptor Pro | V2 | ©️Powered By: Johnathan Cortés 🕵️😼</span>
+            <span class="app-name">Transcriptor Pro | ©️ | Powered By: Johnathan Cortés 🕵️</span>
             <span class="app-tag">BETA</span>
         </div>
     </div>
