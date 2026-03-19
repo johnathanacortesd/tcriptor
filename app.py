@@ -436,10 +436,10 @@ GLOBAL_DEFAULTS = {
     "active_audio_id": None,
     "_search_pending": False,
     "_global_search_pending": False,
-    # Usamos un key dinámico para forzar que st.audio se re-cree
-    # cada vez que el usuario hace clic en un timestamp.
-    # Esto garantiza el salto SIEMPRE, incluso al mismo tiempo.
-    "_audio_widget_key": 0,
+    # Contador que se incrementa en cada salto de timestamp.
+    # Se suma como micro-offset al start_time para forzar que
+    # Streamlit detecte un valor DIFERENTE y re-renderice st.audio.
+    "_jump_counter": 0,
 }
 
 for k, v in {**AUDIO_DEFAULTS, **GLOBAL_DEFAULTS}.items():
@@ -613,15 +613,30 @@ def build_timestamped_transcript(segments):
     return "\n".join(lines)
 
 
+def _get_effective_start_time():
+    """
+    Calcula el start_time efectivo para st.audio.
+    Cada salto incrementa _jump_counter. Sumamos un micro-offset
+    proporcional al contador para que el valor SIEMPRE sea diferente,
+    forzando a Streamlit a actualizar el reproductor.
+    El offset es de 0.01s por salto — imperceptible para el oído
+    pero suficiente para que float != float anterior.
+    """
+    base = st.session_state.audio_start_time
+    counter = st.session_state.get("_jump_counter", 0)
+    # Offset cíclico: 0.01 a 0.99 para evitar acumular demasiado
+    offset = (counter % 100) * 0.01
+    return max(0, base + offset)
+
+
 def jump_to_time(seconds, segment_idx=-1):
     """
-    Fuerza el salto del reproductor incrementando el widget key.
-    Cada vez que _audio_widget_key cambia, Streamlit destruye y
-    re-crea el widget st.audio con el nuevo start_time,
-    garantizando que SIEMPRE salte — incluso al mismo timestamp.
+    Salta el reproductor a un tiempo específico.
+    Incrementa _jump_counter para garantizar que el start_time
+    efectivo sea SIEMPRE diferente al anterior, forzando el re-render.
     """
+    st.session_state._jump_counter = st.session_state.get("_jump_counter", 0) + 1
     st.session_state.audio_start_time = max(0, int(seconds))
-    st.session_state._audio_widget_key = st.session_state.get("_audio_widget_key", 0) + 1
     if segment_idx >= 0:
         st.session_state.active_segment_idx = segment_idx
 
@@ -843,7 +858,6 @@ def merge_chunk_segments(all_chunk_results, overlap_ms=30_000):
         if not merged_segments:
             merged_segments.extend(adjusted)
             continue
-        last_end = merged_segments[-1]["end"]
         overlap_end_sec = (chunk_result["start_ms"] / 1000.0) + (overlap_ms / 1000.0)
         for seg in adjusted:
             if seg["end"] <= overlap_end_sec:
@@ -863,7 +877,6 @@ def merge_chunk_segments(all_chunk_results, overlap_ms=30_000):
                 if is_dup:
                     continue
             merged_segments.append(seg)
-            last_end = max(last_end, seg["end"])
     merged_segments.sort(key=lambda x: x["start"])
     return merged_segments, " ".join(seg["text"] for seg in merged_segments)
 
@@ -989,7 +1002,7 @@ def transcribe_complete(client, path, model, prompt=None, progress_status=None):
         elif progress_status:
             progress_status.write(f"   ⚠️ Parte {ci + 1} sin resultados, reintentando...")
             alt_model = "whisper-large-v3-turbo" if "turbo" not in model else "whisper-large-v3"
-            text2, segments2, error2 = transcribe_single(client, chunk["path"], alt_model, prompt=prompt)
+            text2, segments2, _ = transcribe_single(client, chunk["path"], alt_model, prompt=prompt)
             if segments2:
                 all_results.append({
                     "text": text2, "segments": segments2,
@@ -1145,12 +1158,12 @@ def post_correct_with_vocabulary(client, text, segments, custom_vocab):
 # ============================================================
 
 def _correct_chunk(client, text):
-    prompt = ("Eres un corrector ortográfico. SOLO corrige tildes, mayúsculas y puntuación. "
-              "NO cambies, elimines ni agregues palabras. Devuelve únicamente el texto corregido.")
+    prompt_sys = ("Eres un corrector ortográfico. SOLO corrige tildes, mayúsculas y puntuación. "
+                  "NO cambies, elimines ni agregues palabras. Devuelve únicamente el texto corregido.")
     try:
         r = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
-            messages=[{"role": "system", "content": prompt}, {"role": "user", "content": text}],
+            messages=[{"role": "system", "content": prompt_sys}, {"role": "user", "content": text}],
             temperature=0.0
         )
         out = r.choices[0].message.content.strip()
@@ -1238,12 +1251,12 @@ def search_segments(query, segments, corrected_segments, context_words=30, fuzzy
     if not found and fuzzy_thresh < 1.0:
         offset = 0
         for si, seg in enumerate(target):
-            txt = seg.get("text", "")
-            sc = SequenceMatcher(None, q_norm, norm(txt)).ratio()
+            seg_txt = seg.get("text", "")
+            sc = SequenceMatcher(None, q_norm, norm(seg_txt)).ratio()
             if sc >= fuzzy_thresh:
-                found.append({"pos": offset, "len": len(txt.split()),
+                found.append({"pos": offset, "len": len(seg_txt.split()),
                               "conf": "medium" if sc > 0.85 else "low", "score": sc, "seg": si})
-            offset += len(txt.split())
+            offset += len(seg_txt.split())
     seen, results = set(), []
     for fp in found:
         if fp["seg"] in seen:
@@ -1494,7 +1507,7 @@ def generate_sentiment(client, text):
 
 
 # ============================================================
-# PROCESO PRINCIPAL DE AUDIO
+# PROCESO PRINCIPAL
 # ============================================================
 
 def process_audio(client, uploaded, model, do_correct, custom_vocab=""):
@@ -1655,40 +1668,30 @@ def render_markers(markers, segs):
 # ============================================================
 
 STOPWORDS_ES = {
-    # artículos
     'el', 'la', 'los', 'las', 'un', 'una', 'unos', 'unas', 'lo',
-    # preposiciones
     'a', 'ante', 'bajo', 'cabe', 'con', 'contra', 'de', 'del', 'desde',
     'en', 'entre', 'hacia', 'hasta', 'para', 'por', 'según', 'sin',
     'so', 'sobre', 'tras',
-    # conjunciones
     'y', 'e', 'ni', 'o', 'u', 'pero', 'mas', 'sino', 'que', 'como',
     'porque', 'pues', 'aunque', 'cuando',
-    # pronombres personales
     'yo', 'tú', 'tu', 'él', 'ella', 'ello', 'nosotros', 'nosotras',
     'vosotros', 'vosotras', 'ellos', 'ellas', 'usted', 'ustedes',
     'me', 'te', 'se', 'nos', 'os', 'le', 'les', 'lo', 'la', 'los', 'las',
     'mi', 'mis', 'ti', 'su', 'sus', 'tus', 'mí',
-    # demostrativos
     'este', 'esta', 'esto', 'estos', 'estas',
     'ese', 'esa', 'eso', 'esos', 'esas',
     'aquel', 'aquella', 'aquello', 'aquellos', 'aquellas',
-    # posesivos
     'mío', 'mía', 'míos', 'mías', 'tuyo', 'tuya', 'tuyos', 'tuyas',
     'suyo', 'suya', 'suyos', 'suyas', 'nuestro', 'nuestra', 'nuestros', 'nuestras',
-    # indefinidos
     'otro', 'otra', 'otros', 'otras', 'todo', 'toda', 'todos', 'todas',
     'mucho', 'mucha', 'muchos', 'muchas', 'poco', 'poca', 'pocos', 'pocas',
     'algún', 'alguno', 'alguna', 'algunos', 'algunas', 'algo',
-    'ningún', 'ninguno', 'ninguna', 'ningunos', 'ningunas', 'nada', 'nadie',
+    'ningún', 'ninguno', 'ninguna', 'nada', 'nadie',
     'cada', 'varios', 'varias', 'bastante', 'bastantes',
     'demasiado', 'demasiada', 'demasiados', 'demasiadas',
-    'cualquier', 'cualquiera', 'cualesquiera',
-    'ambos', 'ambas', 'demás',
-    # interrogativos / exclamativos
+    'cualquier', 'cualquiera', 'ambos', 'ambas', 'demás',
     'qué', 'quién', 'quiénes', 'cuál', 'cuáles', 'cuánto', 'cuánta',
     'cuántos', 'cuántas', 'cómo', 'dónde', 'cuándo',
-    # relativos
     'quien', 'quienes', 'cual', 'cuales', 'donde', 'cuyo', 'cuya', 'cuyos', 'cuyas',
     # ser
     'soy', 'eres', 'es', 'somos', 'sois', 'son',
@@ -1782,7 +1785,7 @@ STOPWORDS_ES = {
     'veía', 'veías', 'veíamos', 'veíais', 'veían',
     'vi', 'viste', 'vio', 'vimos', 'visteis', 'vieron',
     'ver', 'visto', 'viendo',
-    # adverbios comunes
+    # adverbios
     'no', 'sí', 'si', 'más', 'menos', 'muy', 'mucho', 'poco',
     'también', 'tampoco', 'ya', 'aún', 'aun', 'todavía',
     'siempre', 'nunca', 'jamás',
@@ -1793,25 +1796,24 @@ STOPWORDS_ES = {
     'hoy', 'ayer', 'mañana',
     'así', 'tan', 'tanto', 'tanta', 'tantos', 'tantas',
     'solo', 'sólo', 'solamente',
-    'además', 'incluso', 'aún',
-    # conectores / muletillas comunes en habla
+    'además', 'incluso',
+    # muletillas habla
     'bueno', 'pues', 'entonces', 'digamos', 'verdad',
     'claro', 'oye', 'mira', 'mire', 'vamos',
     'sea', 'osea', 'ósea',
-    # números como palabras
+    # números
     'uno', 'dos', 'tres', 'cuatro', 'cinco',
     'seis', 'siete', 'ocho', 'nueve', 'diez',
     'once', 'doce', 'trece', 'catorce', 'quince',
     'veinte', 'treinta', 'cien', 'mil',
     'primero', 'primera', 'segundo', 'segunda',
-    # misceláneos muy frecuentes
+    # misceláneos
     'vez', 'veces', 'parte', 'manera', 'forma',
     'cosa', 'cosas', 'tipo', 'tipos', 'tiempo',
     'día', 'días', 'año', 'años', 'momento',
     'ejemplo', 'caso', 'casos',
     'mismo', 'misma', 'mismos', 'mismas',
-    'tal', 'tales',
-    'al', 'del',
+    'tal', 'tales', 'al', 'del',
 }
 
 
@@ -1835,10 +1837,7 @@ def main_app():
         do_correct = st.toggle("Corrección ortográfica", value=True)
         st.markdown("---")
         st.markdown("##### 📝 Vocabulario personalizado")
-        st.caption(
-            "Nombres propios, términos técnicos, palabras en otros idiomas. "
-            "Un término por línea."
-        )
+        st.caption("Nombres propios, términos técnicos, palabras en otros idiomas. Un término por línea.")
         custom_vocab = st.text_area(
             "Vocabulario",
             value=st.session_state.get("custom_vocabulary", ""),
@@ -1927,10 +1926,7 @@ def main_app():
                                         label_visibility="collapsed", key="upload_initial")
             st.markdown("---")
             with st.expander("📝 Vocabulario personalizado (opcional)", expanded=False):
-                st.caption(
-                    "Agrega nombres propios, marcas, términos técnicos o palabras en otros idiomas. "
-                    "Un término por línea o separados por coma."
-                )
+                st.caption("Nombres propios, marcas, términos técnicos. Un término por línea o separados por coma.")
                 initial_vocab = st.text_area(
                     "Vocabulario", placeholder="Bedout\nstreaming\nMedellín",
                     height=100, label_visibility="collapsed", key="initial_vocab"
@@ -1987,6 +1983,9 @@ def main_app():
         "🔍 Búsqueda", "✍️ Redacción", "🌐 Global", "💬 Chat IA", "📊 Análisis", "📥 Exportar"
     ])
 
+    # Calcular start_time efectivo UNA VEZ para todo el render
+    effective_start = _get_effective_start_time()
+
     # ════════════════════════════════════════════════════
     # TAB: REDACCIÓN
     # ════════════════════════════════════════════════════
@@ -2026,12 +2025,7 @@ def main_app():
         with panel_audio:
             st.markdown("<div class='panel-header'>🎵 Reproductor</div>", unsafe_allow_html=True)
             if st.session_state.audio_path:
-                wk = st.session_state.get("_audio_widget_key", 0)
-                st.audio(
-                    st.session_state.audio_path,
-                    start_time=st.session_state.audio_start_time,
-                    key=f"audio_red_{wk}"
-                )
+                st.audio(st.session_state.audio_path, start_time=effective_start)
 
             st.markdown("<div class='panel-header' style='margin-top:10px'>📌 Marcadores</div>",
                         unsafe_allow_html=True)
@@ -2104,12 +2098,7 @@ def main_app():
                 st.session_state._search_pending = True
 
         if st.session_state.audio_path:
-            wk = st.session_state.get("_audio_widget_key", 0)
-            st.audio(
-                st.session_state.audio_path,
-                start_time=st.session_state.audio_start_time,
-                key=f"audio_busq_{wk}"
-            )
+            st.audio(st.session_state.audio_path, start_time=effective_start)
 
         sq1, sq2 = st.columns([5, 0.7])
         with sq1:
@@ -2245,15 +2234,15 @@ def main_app():
                 by_file = {}
                 for r in gres:
                     by_file.setdefault(r.get("audio_name", "audio"), []).append(r)
-                for fname, file_results in by_file.items():
-                    with st.expander(f"📁 {fname} — {len(file_results)} resultado{'s' if len(file_results) != 1 else ''}", expanded=True):
+                for fname_g, file_results in by_file.items():
+                    with st.expander(f"📁 {fname_g} — {len(file_results)} resultado{'s' if len(file_results) != 1 else ''}", expanded=True):
                         for i, r in enumerate(file_results):
                             badge_cls = f"sr-badge-{r.get('confidence', 'low')}"
                             bh = f"<span class='sr-ctx'>...{r.get('before', '')} </span>" if r.get('before') else ""
                             ah = f"<span class='sr-ctx'> {r.get('after', '')}...</span>" if r.get('after') else ""
                             gc1, gc2 = st.columns([0.8, 5])
                             with gc1:
-                                if st.button(f"▶ ir", key=f"gp_{fname}_{i}"):
+                                if st.button(f"▶ ir", key=f"gp_{fname_g}_{i}"):
                                     aid = r.get("audio_id", "")
                                     if aid != st.session_state.active_audio_id:
                                         history_save_current()
@@ -2320,10 +2309,10 @@ def main_app():
         for msg in st.session_state.chat_history:
             with st.chat_message(msg["role"]):
                 st.markdown(msg["content"])
-        if prompt := st.chat_input("Pregunta sobre el audio..."):
-            st.session_state.chat_history.append({"role": "user", "content": prompt})
+        if user_prompt := st.chat_input("Pregunta sobre el audio..."):
+            st.session_state.chat_history.append({"role": "user", "content": user_prompt})
             with st.chat_message("user"):
-                st.markdown(prompt)
+                st.markdown(user_prompt)
             with st.chat_message("assistant"):
                 ph = st.empty()
                 full = ""
@@ -2334,11 +2323,11 @@ def main_app():
                         ts_ctx = ts_ctx[:15000] + "\n[...truncado...]"
                     entities_ctx = ""
                     if st.session_state.entities:
-                        e = st.session_state.entities
+                        ent = st.session_state.entities
                         entities_ctx = (
-                            f"\n\nENTIDADES:\nPersonas: {', '.join(e.get('personas', []))}\n"
-                            f"Organizaciones: {', '.join(e.get('organizaciones', []))}\n"
-                            f"Lugares: {', '.join(e.get('lugares', []))}"
+                            f"\n\nENTIDADES:\nPersonas: {', '.join(ent.get('personas', []))}\n"
+                            f"Organizaciones: {', '.join(ent.get('organizaciones', []))}\n"
+                            f"Lugares: {', '.join(ent.get('lugares', []))}"
                         )
                     system_prompt = (
                         "Eres un asistente periodístico. Responde SOLO con base en la transcripción.\n"
@@ -2359,8 +2348,8 @@ def main_app():
                             ph.markdown(full + "▌")
                     ph.markdown(full)
                     st.session_state.chat_history.append({"role": "assistant", "content": full})
-                except Exception as e:
-                    st.error(f"Error: {e}")
+                except Exception as ex:
+                    st.error(f"Error: {ex}")
         if st.session_state.chat_history:
             if st.button("🗑️ Limpiar conversación"):
                 st.session_state.chat_history = []
@@ -2455,11 +2444,11 @@ def main_app():
         with c2:
             srt = []
             for i, seg in enumerate(segs):
-                s, e = float(seg.get("start", 0)), float(seg.get("end", 0))
+                s, e_t = float(seg.get("start", 0)), float(seg.get("end", 0))
                 srt.extend([
                     f"{i + 1}",
                     f"{int(s // 3600):02d}:{int((s % 3600) // 60):02d}:{s % 60:06.3f} --> "
-                    f"{int(e // 3600):02d}:{int((e % 3600) // 60):02d}:{e % 60:06.3f}",
+                    f"{int(e_t // 3600):02d}:{int((e_t % 3600) // 60):02d}:{e_t % 60:06.3f}",
                     seg.get("text", ""), ""
                 ])
             st.download_button("🎬 Subtítulos (.srt)", data="\n".join(srt),
