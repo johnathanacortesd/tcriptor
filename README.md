@@ -22,6 +22,8 @@
 ![LLaMA](https://img.shields.io/badge/LLaMA-3.3_70B-C2410C?style=for-the-badge&logoColor=white)
 ![Estado](https://img.shields.io/badge/Estado-Activo-4CAF50?style=for-the-badge)
 
+[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://tj-criptor.streamlit.app/)
+
 <br/>
 
 > **Transcriptor Pro** convierte archivos de audio en texto, entidades, titulares, subtítulos y análisis periodístico — potenciado por **Whisper Large V3** para la transcripción y **LLaMA 3.3 70B** para el razonamiento. Diseñado para periodistas que necesitan ir de la grabación al artículo sin fricciones.
