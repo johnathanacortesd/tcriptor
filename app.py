@@ -15,7 +15,7 @@ st.set_page_config(
     page_title="Transcriptor Pro",
     page_icon="🎙️",
     layout="wide",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state="expanded" # Expandido por defecto para que sea visible el sidebar de inmediato
 )
 
 # --- CSS ---
@@ -1353,20 +1353,30 @@ def process_audio(client, uploaded, model, do_correct, custom_vocab=""):
 
 
 # ============================================================
-# VISOR SEGMENTOS
+# VISOR SEGMENTOS — [MEJORADO CON FILTRO REAL]
 # ============================================================
 def render_segment_viewer(segments, active_idx=-1, search_query="", max_height="580px"):
     if not segments: return
     rows = []
+    q_norm = norm(search_query) if search_query else ""
     for i, seg in enumerate(segments):
         start_sec = float(seg.get("start", 0)); ts = fmt_time(start_sec)
         text = seg.get("text", "").strip()
-        if search_query: text = highlight_html(text, search_query)
+        
+        # [FILTRO REAL] Si hay un término de búsqueda, omitir el segmento si no contiene la coincidencia
+        if q_norm and q_norm not in norm(text):
+            continue
+            
+        display_text = highlight_html(text, search_query) if search_query else text
         rec = " <span style='color:var(--amber);font-size:0.7em'>🔄</span>" if seg.get("recovered") else ""
         ac = "active" if i == active_idx else ""
         rows.append(f"<div class='seg-row {ac}' onclick='window.jumpToTime({start_sec})' style='cursor:pointer'>"
-                    f"<span class='seg-ts'>{ts}</span><span class='seg-txt'>{text}{rec}</span></div>")
-    st.markdown(f"<div class='seg-viewer' style='max-height:{max_height}'>{''.join(rows)}</div>", unsafe_allow_html=True)
+                    f"<span class='seg-ts'>{ts}</span><span class='seg-txt'>{display_text}{rec}</span></div>")
+    
+    if not rows and search_query:
+        st.markdown(f"<div class='no-results-box'>🔍 Sin coincidencias para '{search_query}'</div>", unsafe_allow_html=True)
+    else:
+        st.markdown(f"<div class='seg-viewer' style='max-height:{max_height}'>{''.join(rows)}</div>", unsafe_allow_html=True)
 
 
 # ============================================================
@@ -1426,27 +1436,28 @@ def main_app():
         else:
             st.markdown(f"<div style='font-size:0.7rem;color:#d97706;background:#fffbeb;padding:5px 9px;border-radius:6px;border:1px solid #fcd34d'>⚠️ {pydub_msg}</div>", unsafe_allow_html=True)
 
-        # ── NUEVO AUDIO (sidebar) — [INTEGRACIÓN MEJORA 1] ──────────────────────────────────
+        # ── NUEVO AUDIO (sidebar) — [MEJORADO CON ETIQUETAS VISIBLES] ──────────────────────────────────
         st.markdown("---")
-        st.markdown("##### ➕ Nuevo audio")
+        st.markdown("##### ➕ Subir nuevo audio")
 
         if st.session_state.transcript_text:
             if len(st.session_state.audio_history) >= MAX_HISTORY:
                 st.caption(f"⚠️ Historial lleno ({MAX_HISTORY} audios). Elimina uno desde la pestaña Global.")
             else:
                 new_file_sidebar = st.file_uploader(
-                    "Subir audio",
+                    "Selecciona un archivo de audio:",
                     type=["mp3", "wav", "m4a", "ogg", "mp4"],
-                    label_visibility="collapsed",
+                    label_visibility="visible",
                     key="upload_sidebar"
                 )
                 if new_file_sidebar:
+                    st.info(f"Seleccionado: **{new_file_sidebar.name}**")
                     vocab_sb = st.session_state.get("custom_vocabulary", "") or custom_vocab
                     if st.button("🚀 Transcribir este audio", type="primary", use_container_width=True, key="proc_sidebar"):
                         if process_audio(client, new_file_sidebar, model, do_correct, custom_vocab=vocab_sb):
                             st.rerun()
         else:
-            st.caption("Sube tu primer audio abajo ↓")
+            st.caption("Sube tu primer audio en el centro de la pantalla ↓")
 
         st.markdown("---")
         if st.button("🚪 Cerrar sesión", use_container_width=True):
@@ -1486,7 +1497,7 @@ def main_app():
                     else:
                         st.button(f"✓ {fn}", key=f"active_{h['id']}", use_container_width=True, disabled=True)
 
-    # ── SIN TRANSCRIPCIÓN ──
+    # ── SIN TRANSCRIPCIÓN (PANTALLA INICIAL) ──
     if not st.session_state.transcript_text:
         _, col_c, _ = st.columns([1, 2, 1])
         with col_c:
@@ -1521,8 +1532,7 @@ def main_app():
     wpm = round(n_words / max(duration/60, 1)) if duration > 0 else 0
 
     # ══════════════════════════════════════════════════════════
-    # LAYOUT PRINCIPAL — [INTEGRACIÓN MEJORA 3]
-    # columna izquierda fija + columna derecha con tabs
+    # LAYOUT PRINCIPAL: Columna izquierda fija + Columna derecha con pestañas
     # ══════════════════════════════════════════════════════════
     left_col, right_col = st.columns([0.33, 0.67], gap="medium")
 
@@ -1560,12 +1570,12 @@ def main_app():
                 unsafe_allow_html=True
             )
 
-        # ── SEGMENTOS CON TIMESTAMPS ──
-        st.markdown("<div class='panel-header' style='margin-top:10px'>⏱️ Segmentos</div>", unsafe_allow_html=True)
+        # ── SEGMENTOS CON TIMESTAMPS (COLUMNA IZQUIERDA) ──
+        st.markdown("<div class='panel-header' style='margin-top:10px'>⏱️ Filtrar Segmentos</div>", unsafe_allow_html=True)
 
         sq_left = st.text_input(
             "seg_search",
-            placeholder="Filtrar segmentos...",
+            placeholder="Escribe para buscar y filtrar segmentos...",
             label_visibility="collapsed",
             key="q_seg_left"
         )
@@ -1586,7 +1596,7 @@ def main_app():
                         unsafe_allow_html=True
                     )
 
-    # ── COLUMNA DERECHA: TABS ──────────────────────────────────
+    # ── COLUMNA DERECHA: PESTAÑAS ──────────────────────────────────
     with right_col:
         tab_busqueda, tab_entidades, tab_global, tab_chat, tab_analisis, tab_export = st.tabs([
             "🔍 Búsqueda", "🏷️ Entidades", "🌐 Global", "💬 Chat IA", "📊 Análisis", "📥 Exportar"
@@ -1734,7 +1744,7 @@ def main_app():
             if len(hist) <= 1:
                 st.markdown('<div class="empty-state"><div class="empty-state-icon">🌐</div>'
                             '<div class="empty-state-title">Agrega más audios</div>'
-                            '<div class="empty-state-text">Necesitas al menos 2</div></div>', unsafe_allow_html=True)
+                            '<div class="empty-state-text">Necesitas al menos 2 en sesión. Sube otro archivo desde el menú lateral expandido.</div></div>', unsafe_allow_html=True)
             else:
                 def execute_global_search():
                     q = st.session_state.get("gq_input", "").strip()
