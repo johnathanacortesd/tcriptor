@@ -15,14 +15,14 @@ st.set_page_config(
     page_title="Transcriptor Pro",
     page_icon="🎙️",
     layout="wide",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state="expanded"  # Se abre por defecto para facilitar la subida de archivos
 )
 
 # --- CSS ---
 st.markdown("""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght=300;400;500;600;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght=400;500&display=swap');
 
     :root {
         --primary: #ea580c;
@@ -671,9 +671,14 @@ def split_audio_chunks(audio_segment, chunk_duration_ms=600_000, overlap_ms=30_0
     return chunks
 
 def build_prompt_vocabulary(custom_vocab):
-    if not custom_vocab or not custom_vocab.strip(): return None
+    # Prompt base en español para guiar la correcta puntuación y acentuación en Whisper
+    base_prompt = "Transcripción exacta en español, respetando acentos, ortografía, puntuación, nombres propios y de marcas."
+    if not custom_vocab or not custom_vocab.strip(): 
+        return base_prompt
     terms = [t.strip() for line in custom_vocab.replace(",", "\n").split("\n") for t in [line.strip()] if t and len(t) > 1]
-    return ". ".join(terms) + "." if terms else None
+    if terms:
+        return base_prompt + " Vocabulario clave: " + ", ".join(terms) + "."
+    return base_prompt
 
 def transcribe_single(client, path, model, prompt=None, max_retries=3):
     for attempt in range(max_retries):
@@ -810,7 +815,7 @@ def transcribe_complete(client, path, model, prompt=None, ps=None):
                 if not any(abs(seg["start"]-e["start"]) < 1.5 and SequenceMatcher(None, norm(seg["text"]), norm(e["text"])).ratio() > 0.6 for e in dd[-10:]):
                     dd.append(seg)
             merged = dd; ft = " ".join(s["text"] for s in merged)
-            cov = calculate_coverage(merged, ds); gaps = find_coverage_gaps(merged, ds, gap_threshold=th)
+            cov = calculate_coverage(merged, ds); gaps = find_coverage_gaps(merged, ds, threshold=th)
         else: break
     if ps: ps.write(f"✅ Cobertura: {cov:.1f}%")
     return ft, merged, dur_ms, cov, gaps, nc
@@ -862,9 +867,17 @@ def post_correct_with_vocabulary(client, text, segments, custom_vocab):
 
 def _correct_chunk(client, text):
     try:
+        system_prompt = (
+            "Eres un corrector ortográfico y de estilo especializado en transcripciones de audio en español.\n"
+            "Tu única tarea es corregir la acentuación (tildes), mayúsculas y signos de puntuación del texto.\n"
+            "REGLAS CRÍTICAS:\n"
+            "1. NO cambies, elimines, reescribas ni agregues palabras de tu propia iniciativa. Mantén el léxico original del hablante.\n"
+            "2. NO intentes hacer el texto más formal si eso altera el vocabulario del audio original.\n"
+            "3. Devuelve únicamente el texto corregido, sin introducciones ni comentarios explicativos."
+        )
         r = client.chat.completions.create(model="llama-3.3-70b-versatile",
-            messages=[{"role": "system", "content": "Eres un corrector ortográfico. SOLO corrige tildes, mayúsculas y puntuación. NO cambies, elimines ni agregues palabras. Devuelve únicamente el texto corregido."},
-                      {"role": "user", "content": text}], temperature=0.0)
+            messages=[{"role": "system", "content": system_prompt},
+                      {"role": "user", "content": text}], temperature=0.1)
         out = r.choices[0].message.content.strip()
         for p in ["Aquí", "Texto corregido", "Corrección"]:
             if out.startswith(p) and ":" in out[:30]: out = out.split(":", 1)[1].strip(); break
@@ -964,22 +977,13 @@ def global_search(query, audio_history, fuzzy_thresh=0.75):
 # ============================================================
 
 def _parse_entities_json(raw_content):
-    """
-    Intenta extraer un JSON válido de entidades desde la respuesta del modelo.
-    Maneja múltiples formatos de respuesta y casos de error.
-    Retorna un dict con las 5 claves esperadas, o None si no se puede parsear.
-    """
     if not raw_content or not isinstance(raw_content, str):
         return None
 
     text = raw_content.strip()
+    text = re.sub(r"```(json)?\s*", "", text)
+    text = re.sub(r"```\s*", "", text).strip()
 
-    # 1) Remover bloques de código markdown: ```json ... ``` o ``` ... ```
-    text = re.sub(r"```(?:json)?\s*", "", text)
-    text = re.sub(r"```\s*", "", text)
-    text = text.strip()
-
-    # 2) Intentar parsear directamente
     try:
         parsed = json.loads(text)
         if isinstance(parsed, dict):
@@ -987,7 +991,6 @@ def _parse_entities_json(raw_content):
     except json.JSONDecodeError:
         pass
 
-    # 3) Buscar el primer bloque { ... } en el texto (por si hay prefijos/sufijos)
     brace_match = re.search(r'\{[\s\S]*\}', text)
     if brace_match:
         try:
@@ -997,7 +1000,6 @@ def _parse_entities_json(raw_content):
         except json.JSONDecodeError:
             pass
 
-    # 4) Intentar reparar JSON con comillas simples → dobles
     try:
         fixed = text.replace("'", '"')
         parsed = json.loads(fixed)
@@ -1006,8 +1008,6 @@ def _parse_entities_json(raw_content):
     except json.JSONDecodeError:
         pass
 
-    # 5) Extracción manual con regex como último recurso
-    #    Busca patrones: "clave": ["val1", "val2", ...]
     result = {}
     list_pattern = re.compile(
         r'"?(personas|organizaciones|lugares|fechas|otros)"?\s*:\s*\[([^\]]*)\]',
@@ -1016,10 +1016,8 @@ def _parse_entities_json(raw_content):
     for match in list_pattern.finditer(text):
         key = match.group(1).lower()
         items_raw = match.group(2)
-        # Extraer strings entre comillas
         items = re.findall(r'"([^"]+)"', items_raw)
         if not items:
-            # Intentar sin comillas (elementos separados por coma)
             items = [i.strip().strip("'") for i in items_raw.split(",") if i.strip().strip("'")]
         result[key] = items
 
@@ -1030,21 +1028,14 @@ def _parse_entities_json(raw_content):
 
 
 def extract_entities(client, text):
-    """
-    Extrae entidades nombradas del texto usando la API de Groq.
-    Versión robusta con múltiples estrategias de fallback.
-    """
-    # Verificar caché
     if st.session_state.entities is not None:
         return st.session_state.entities
 
-    # Validar que text sea un string real
     if not isinstance(text, str) or not text.strip():
         fallback = {k: [] for k in ["personas", "organizaciones", "lugares", "fechas", "otros"]}
         st.session_state.entities = fallback
         return fallback
 
-    # Truncar texto si es muy largo
     text_to_analyze = text[:8000] if len(text) > 8000 else text
 
     system = """Eres un extractor de entidades nombradas para periodismo.
@@ -1068,7 +1059,6 @@ No incluyas explicaciones, comentarios ni bloques de código markdown."""
 
     last_error = None
 
-    # Intentar hasta 3 veces con temperatura progresivamente mayor
     for attempt in range(3):
         try:
             temp = 0.0 if attempt == 0 else (0.1 if attempt == 1 else 0.2)
@@ -1086,7 +1076,6 @@ No incluyas explicaciones, comentarios ni bloques de código markdown."""
             parsed = _parse_entities_json(raw_content)
 
             if parsed is not None:
-                # Normalizar claves y asegurar que sean listas de strings
                 result = {}
                 for key in ["personas", "organizaciones", "lugares", "fechas", "otros"]:
                     val = parsed.get(key, [])
@@ -1104,7 +1093,6 @@ No incluyas explicaciones, comentarios ni bloques de código markdown."""
             if attempt < 2:
                 time.sleep(1)
 
-    # Si todos los intentos fallaron, guardar el error para mostrarlo
     st.session_state._entities_error = last_error
     fallback = {k: [] for k in ["personas", "organizaciones", "lugares", "fechas", "otros"]}
     st.session_state.entities = fallback
@@ -1187,11 +1175,9 @@ Responde ÚNICAMENTE con un objeto JSON válido, sin texto adicional:
             temperature=0.2, max_tokens=600
         )
         raw = r.choices[0].message.content.strip()
-        # Limpiar markdown fences
-        raw = re.sub(r"```(?:json)?\s*", "", raw)
+        raw = re.sub(r"```(json)?\s*", "", raw)
         raw = re.sub(r"```\s*", "", raw).strip()
 
-        # Buscar JSON
         brace_match = re.search(r'\{[\s\S]*\}', raw)
         if brace_match:
             result = json.loads(brace_match.group())
@@ -1364,16 +1350,32 @@ def main_app():
     if not client: st.stop()
     pydub_ok, pydub_msg = check_pydub_ffmpeg()
 
-    # ── SIDEBAR ──
+    # ── SIDEBAR (CON PANEL DE CONTROL Y SUBIDA PERMANENTE) ──
     with st.sidebar:
-        st.markdown("#### ⚙️ Config")
+        st.markdown("### 📥 Cargar Nuevo Audio")
+        # El selector de archivos se ubica de forma fija aquí para evitar el scroll hacia abajo
+        uploaded = st.file_uploader(
+            "Seleccionar audio o video", 
+            type=["mp3", "wav", "m4a", "ogg", "mp4"], 
+            label_visibility="collapsed", 
+            key="sidebar_uploader"
+        )
+        
+        st.markdown("#### ⚙️ Configuración")
         model = st.selectbox("Modelo Whisper", ["whisper-large-v3", "whisper-large-v3-turbo"],
                              format_func=lambda x: "V3 Precisión" if "turbo" not in x else "V3 Turbo")
         do_correct = st.toggle("Corrección ortográfica", value=True)
+        
+        # El botón para iniciar procesamiento se ubica de forma visible y cercana
+        if uploaded:
+            if st.button("🚀 Transcribir Audio", type="primary", use_container_width=True, key="sidebar_btn_process"):
+                if process_audio(client, uploaded, model, do_correct, custom_vocab=st.session_state.get("sidebar_vocab", "")):
+                    st.rerun()
+                    
         st.markdown("---")
         st.markdown("##### 📝 Vocabulario")
         custom_vocab = st.text_area("Vocabulario", value=st.session_state.get("custom_vocabulary", ""),
-            placeholder="Bedout\nstreaming\nMedellín", height=120, label_visibility="collapsed", key="sidebar_vocab")
+            placeholder="Palabras técnicas\nNombres de marcas\nMedellín", height=120, label_visibility="collapsed", key="sidebar_vocab")
         st.markdown("---")
         st.markdown("##### 🔍 Búsqueda")
         ctx_w = st.slider("Palabras contexto", 10, 60, 30, step=5)
@@ -1427,15 +1429,8 @@ def main_app():
         _, col_c, _ = st.columns([1, 2, 1])
         with col_c:
             st.markdown('<div class="empty-state"><div class="empty-state-icon">📂</div>'
-                        '<div class="empty-state-title">Sube un archivo de audio</div>'
-                        '<div class="empty-state-text">MP3, WAV, M4A, OGG o MP4</div></div>', unsafe_allow_html=True)
-            uploaded = st.file_uploader("x", type=["mp3","wav","m4a","ogg","mp4"], label_visibility="collapsed", key="upload_initial")
-            st.markdown("---")
-            with st.expander("📝 Vocabulario personalizado", expanded=False):
-                initial_vocab = st.text_area("Vocabulario", placeholder="Bedout\nstreaming", height=100, label_visibility="collapsed", key="initial_vocab")
-            if uploaded and st.button("🚀 Transcribir", type="primary", use_container_width=True):
-                vocab = st.session_state.get("initial_vocab", "") or custom_vocab
-                if process_audio(client, uploaded, model, do_correct, custom_vocab=vocab): st.rerun()
+                        '<div class="empty-state-title">Por favor, cargue un archivo de audio</div>'
+                        '<div class="empty-state-text">Use el panel lateral de la izquierda para subir y transcribir sus archivos (.mp3, .wav, .m4a, .ogg, .mp4)</div></div>', unsafe_allow_html=True)
         return
 
     # ══════════════════════════════════════════════
@@ -1443,7 +1438,6 @@ def main_app():
     # ══════════════════════════════════════════════
     txt = st.session_state.transcript_text
 
-    # Garantizar que txt sea siempre un string
     if not isinstance(txt, str):
         txt = str(txt) if txt is not None else ""
         st.session_state.transcript_text = txt
@@ -1548,14 +1542,6 @@ def main_app():
                     ts_btn = make_ts_button_html(max(0, gap["start"]-1))
                     st.markdown(f"{ts_btn} `{fmt_time(gap['start'])}` → `{fmt_time(gap['end'])}` — **{gap['duration']:.1f}s**", unsafe_allow_html=True)
 
-        st.markdown("---")
-        if st.checkbox("📂 Agregar otro audio", value=False, key="show_new_busqueda"):
-            if len(hist) >= MAX_HISTORY: st.warning(f"Historial lleno ({MAX_HISTORY}).")
-            else:
-                new_file = st.file_uploader("xb", type=["mp3","wav","m4a","ogg","mp4"], label_visibility="collapsed", key="upload_new_b")
-                if new_file and st.button("🔄 Procesar", type="primary", use_container_width=True, key="proc_b"):
-                    if process_audio(client, new_file, model, do_correct, custom_vocab=custom_vocab): st.rerun()
-
     # ════════════════════════════════════════
     # TAB: ENTIDADES
     # ════════════════════════════════════════
@@ -1568,10 +1554,8 @@ def main_app():
             btn_col1, btn_col2 = st.columns(2)
             with btn_col1:
                 if st.button("🏷️ Extraer Entidades", type="primary", use_container_width=True):
-                    # Limpiar caché y errores previos
                     st.session_state.entities = None
                     st.session_state._entities_error = None
-                    # Usar txt (ya garantizado como string)
                     with st.spinner("Extrayendo entidades..."):
                         extracted = extract_entities(client, txt)
                     st.rerun()
@@ -1583,7 +1567,6 @@ def main_app():
                         _ = generate_lead(client, txt, fname_display)
                     st.rerun()
 
-            # Mostrar error si hubo problema con entidades
             if st.session_state.get("_entities_error") and st.session_state.entities is not None:
                 all_empty = all(
                     len(v) == 0
@@ -1598,7 +1581,6 @@ def main_app():
                     )
 
             if st.session_state.entities is not None:
-                # Solo mostrar panel si hay alguna entidad
                 all_empty = all(
                     len(v) == 0
                     for v in st.session_state.entities.values()
@@ -1647,7 +1629,7 @@ def main_app():
         if len(hist) <= 1:
             st.markdown('<div class="empty-state"><div class="empty-state-icon">🌐</div>'
                         '<div class="empty-state-title">Agrega más audios</div>'
-                        '<div class="empty-state-text">Necesitas al menos 2</div></div>', unsafe_allow_html=True)
+                        '<div class="empty-state-text">Necesitas al menos 2 audios en el historial para realizar búsquedas cruzadas o comparaciones globales.</div></div>', unsafe_allow_html=True)
         else:
             def execute_global_search():
                 q = st.session_state.get("gq_input", "").strip()
