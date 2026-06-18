@@ -15,14 +15,14 @@ st.set_page_config(
     page_title="Transcriptor Pro",
     page_icon="🎙️",
     layout="wide",
-    initial_sidebar_state="expanded"  # Se abre por defecto para facilitar la subida de archivos
+    initial_sidebar_state="collapsed"
 )
 
 # --- CSS ---
 st.markdown("""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght=300;400;500;600;700&display=swap');
-    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght=400;500&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap');
 
     :root {
         --primary: #ea580c;
@@ -633,8 +633,10 @@ def convert_to_mp3(input_path, status_writer=None):
     out_path = input_path.rsplit(".", 1)[0] + "_converted.mp3"
     if status_writer: status_writer.write(f"🔄 Convirtiendo a MP3 ({size_mb:.0f} MB)...")
     import subprocess
+    # NORMALIZACIÓN EBU R128 para evitar clipping y nivelar voces
     cmd = [ffmpeg_bin, "-y", "-i", input_path, "-vn", "-acodec", "libmp3lame",
-           "-ac", "1", "-ar", "16000", "-b:a", "64k", "-af", "aresample=16000,volume=1.5", out_path]
+           "-ac", "1", "-ar", "16000", "-b:a", "64k", 
+           "-af", "loudnorm=I=-16:TP=-1.5:LRA=11,aresample=16000", out_path]
     try:
         result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=300)
         if result.returncode != 0:
@@ -671,13 +673,12 @@ def split_audio_chunks(audio_segment, chunk_duration_ms=600_000, overlap_ms=30_0
     return chunks
 
 def build_prompt_vocabulary(custom_vocab):
-    # Prompt base en español para guiar la correcta puntuación y acentuación en Whisper
-    base_prompt = "Transcripción exacta en español, respetando acentos, ortografía, puntuación, nombres propios y de marcas."
-    if not custom_vocab or not custom_vocab.strip(): 
-        return base_prompt
+    # Prompt semilla fuerte para forzar español, formalidad y puntuación
+    base_prompt = "A continuación, una transcripción detallada en español con puntuación perfecta de un reporte de medios y actualidad:"
+    if not custom_vocab or not custom_vocab.strip(): return base_prompt
     terms = [t.strip() for line in custom_vocab.replace(",", "\n").split("\n") for t in [line.strip()] if t and len(t) > 1]
     if terms:
-        return base_prompt + " Vocabulario clave: " + ", ".join(terms) + "."
+        return base_prompt + " Vocabulario clave: " + ". ".join(terms) + "."
     return base_prompt
 
 def transcribe_single(client, path, model, prompt=None, max_retries=3):
@@ -815,7 +816,7 @@ def transcribe_complete(client, path, model, prompt=None, ps=None):
                 if not any(abs(seg["start"]-e["start"]) < 1.5 and SequenceMatcher(None, norm(seg["text"]), norm(e["text"])).ratio() > 0.6 for e in dd[-10:]):
                     dd.append(seg)
             merged = dd; ft = " ".join(s["text"] for s in merged)
-            cov = calculate_coverage(merged, ds); gaps = find_coverage_gaps(merged, ds, threshold=th)
+            cov = calculate_coverage(merged, ds); gaps = find_coverage_gaps(merged, ds, gap_threshold=th)
         else: break
     if ps: ps.write(f"✅ Cobertura: {cov:.1f}%")
     return ft, merged, dur_ms, cov, gaps, nc
@@ -866,18 +867,20 @@ def post_correct_with_vocabulary(client, text, segments, custom_vocab):
     except: return text, segments
 
 def _correct_chunk(client, text):
+    system_prompt = (
+        "Eres un corrector ortográfico automatizado. Tu ÚNICA tarea es corregir tildes, "
+        "mayúsculas y signos de puntuación de una transcripción de audio.\n\n"
+        "REGLAS ESTRICTAS:\n"
+        "1. NO cambies el orden de las palabras.\n"
+        "2. NO agregues palabras nuevas.\n"
+        "3. NO elimines palabras, incluso si parecen muletillas o redundancias.\n"
+        "4. NO resumas el texto.\n\n"
+        "Devuelve únicamente el texto corregido sin introducciones."
+    )
     try:
-        system_prompt = (
-            "Eres un corrector ortográfico y de estilo especializado en transcripciones de audio en español.\n"
-            "Tu única tarea es corregir la acentuación (tildes), mayúsculas y signos de puntuación del texto.\n"
-            "REGLAS CRÍTICAS:\n"
-            "1. NO cambies, elimines, reescribas ni agregues palabras de tu propia iniciativa. Mantén el léxico original del hablante.\n"
-            "2. NO intentes hacer el texto más formal si eso altera el vocabulario del audio original.\n"
-            "3. Devuelve únicamente el texto corregido, sin introducciones ni comentarios explicativos."
-        )
         r = client.chat.completions.create(model="llama-3.3-70b-versatile",
             messages=[{"role": "system", "content": system_prompt},
-                      {"role": "user", "content": text}], temperature=0.1)
+                      {"role": "user", "content": text}], temperature=0.0)
         out = r.choices[0].message.content.strip()
         for p in ["Aquí", "Texto corregido", "Corrección"]:
             if out.startswith(p) and ":" in out[:30]: out = out.split(":", 1)[1].strip(); break
@@ -981,8 +984,9 @@ def _parse_entities_json(raw_content):
         return None
 
     text = raw_content.strip()
-    text = re.sub(r"```(json)?\s*", "", text)
-    text = re.sub(r"```\s*", "", text).strip()
+    text = re.sub(r"```(?:json)?\s*", "", text)
+    text = re.sub(r"```\s*", "", text)
+    text = text.strip()
 
     try:
         parsed = json.loads(text)
@@ -1023,7 +1027,6 @@ def _parse_entities_json(raw_content):
 
     if result:
         return result
-
     return None
 
 
@@ -1175,7 +1178,7 @@ Responde ÚNICAMENTE con un objeto JSON válido, sin texto adicional:
             temperature=0.2, max_tokens=600
         )
         raw = r.choices[0].message.content.strip()
-        raw = re.sub(r"```(json)?\s*", "", raw)
+        raw = re.sub(r"```(?:json)?\s*", "", raw)
         raw = re.sub(r"```\s*", "", raw).strip()
 
         brace_match = re.search(r'\{[\s\S]*\}', raw)
@@ -1290,7 +1293,7 @@ def process_audio(client, uploaded, model, do_correct, custom_vocab=""):
             st.session_state.transcript_text = full_text
             st.session_state.corrected_segments = segments
             st.session_state.correction_applied = False
-        st.session_state.audio_start_time = 0; st.session_state._audio_widget_key = 0
+        st.session_state.audio_start_time = 0; st.session_state._audio_widget_key = st.session_state.get("_audio_widget_key", 0) + 1
         wc = len(full_text.split())
         cov_icon = "✅" if coverage >= 95 else "⚠️" if coverage >= 80 else "❌"
         status.update(label=f"{cov_icon} {wc:,} palabras · {coverage:.0f}% cobertura", state="complete", expanded=False)
@@ -1350,32 +1353,16 @@ def main_app():
     if not client: st.stop()
     pydub_ok, pydub_msg = check_pydub_ffmpeg()
 
-    # ── SIDEBAR (CON PANEL DE CONTROL Y SUBIDA PERMANENTE) ──
+    # ── SIDEBAR ──
     with st.sidebar:
-        st.markdown("### 📥 Cargar Nuevo Audio")
-        # El selector de archivos se ubica de forma fija aquí para evitar el scroll hacia abajo
-        uploaded = st.file_uploader(
-            "Seleccionar audio o video", 
-            type=["mp3", "wav", "m4a", "ogg", "mp4"], 
-            label_visibility="collapsed", 
-            key="sidebar_uploader"
-        )
-        
-        st.markdown("#### ⚙️ Configuración")
+        st.markdown("#### ⚙️ Config")
         model = st.selectbox("Modelo Whisper", ["whisper-large-v3", "whisper-large-v3-turbo"],
                              format_func=lambda x: "V3 Precisión" if "turbo" not in x else "V3 Turbo")
         do_correct = st.toggle("Corrección ortográfica", value=True)
-        
-        # El botón para iniciar procesamiento se ubica de forma visible y cercana
-        if uploaded:
-            if st.button("🚀 Transcribir Audio", type="primary", use_container_width=True, key="sidebar_btn_process"):
-                if process_audio(client, uploaded, model, do_correct, custom_vocab=st.session_state.get("sidebar_vocab", "")):
-                    st.rerun()
-                    
         st.markdown("---")
         st.markdown("##### 📝 Vocabulario")
         custom_vocab = st.text_area("Vocabulario", value=st.session_state.get("custom_vocabulary", ""),
-            placeholder="Palabras técnicas\nNombres de marcas\nMedellín", height=120, label_visibility="collapsed", key="sidebar_vocab")
+            placeholder="Bedout\nstreaming\nMedellín", height=120, label_visibility="collapsed", key="sidebar_vocab")
         st.markdown("---")
         st.markdown("##### 🔍 Búsqueda")
         ctx_w = st.slider("Palabras contexto", 10, 60, 30, step=5)
@@ -1424,13 +1411,22 @@ def main_app():
                     else:
                         st.button(f"✓ {fn}", key=f"active_{h['id']}", use_container_width=True, disabled=True)
 
+    # ── CARGA SUPERIOR (SIEMPRE VISIBLE / PREDETERMINADA) ──
+    is_empty = not bool(st.session_state.transcript_text)
+    with st.expander("📁 Subir nuevo audio", expanded=is_empty):
+        col_up1, col_up2 = st.columns([3, 1])
+        with col_up1:
+            uploaded = st.file_uploader("Subir archivo", type=["mp3","wav","m4a","ogg","mp4"], label_visibility="collapsed", key=f"upload_top_{st.session_state._audio_widget_key}")
+        with col_up2:
+            if uploaded and st.button("🚀 Transcribir", type="primary", use_container_width=True, key="btn_transcribe_top"):
+                vocab = st.session_state.get("sidebar_vocab", "") or custom_vocab
+                if process_audio(client, uploaded, model, do_correct, custom_vocab=vocab): st.rerun()
+
     # ── SIN TRANSCRIPCIÓN ──
-    if not st.session_state.transcript_text:
-        _, col_c, _ = st.columns([1, 2, 1])
-        with col_c:
-            st.markdown('<div class="empty-state"><div class="empty-state-icon">📂</div>'
-                        '<div class="empty-state-title">Por favor, cargue un archivo de audio</div>'
-                        '<div class="empty-state-text">Use el panel lateral de la izquierda para subir y transcribir sus archivos (.mp3, .wav, .m4a, .ogg, .mp4)</div></div>', unsafe_allow_html=True)
+    if is_empty:
+        st.markdown('<div class="empty-state"><div class="empty-state-icon">📂</div>'
+                    '<div class="empty-state-title">Esperando archivo de audio</div>'
+                    '<div class="empty-state-text">Sube tu MP3, WAV o MP4 en el panel superior</div></div>', unsafe_allow_html=True)
         return
 
     # ══════════════════════════════════════════════
@@ -1438,6 +1434,7 @@ def main_app():
     # ══════════════════════════════════════════════
     txt = st.session_state.transcript_text
 
+    # Garantizar que txt sea siempre un string
     if not isinstance(txt, str):
         txt = str(txt) if txt is not None else ""
         st.session_state.transcript_text = txt
@@ -1629,7 +1626,7 @@ def main_app():
         if len(hist) <= 1:
             st.markdown('<div class="empty-state"><div class="empty-state-icon">🌐</div>'
                         '<div class="empty-state-title">Agrega más audios</div>'
-                        '<div class="empty-state-text">Necesitas al menos 2 audios en el historial para realizar búsquedas cruzadas o comparaciones globales.</div></div>', unsafe_allow_html=True)
+                        '<div class="empty-state-text">Necesitas al menos 2</div></div>', unsafe_allow_html=True)
         else:
             def execute_global_search():
                 q = st.session_state.get("gq_input", "").strip()
