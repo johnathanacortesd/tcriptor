@@ -21,8 +21,8 @@ st.set_page_config(
 # --- CSS ---
 st.markdown("""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght=300;400;500;600;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght=400;500&display=swap');
 
     :root {
         --primary: #ea580c;
@@ -633,10 +633,8 @@ def convert_to_mp3(input_path, status_writer=None):
     out_path = input_path.rsplit(".", 1)[0] + "_converted.mp3"
     if status_writer: status_writer.write(f"🔄 Convirtiendo a MP3 ({size_mb:.0f} MB)...")
     import subprocess
-    # NORMALIZACIÓN EBU R128 para evitar clipping y nivelar voces
     cmd = [ffmpeg_bin, "-y", "-i", input_path, "-vn", "-acodec", "libmp3lame",
-           "-ac", "1", "-ar", "16000", "-b:a", "64k", 
-           "-af", "loudnorm=I=-16:TP=-1.5:LRA=11,aresample=16000", out_path]
+           "-ac", "1", "-ar", "16000", "-b:a", "64k", "-af", "aresample=16000,volume=1.5", out_path]
     try:
         result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=300)
         if result.returncode != 0:
@@ -673,13 +671,9 @@ def split_audio_chunks(audio_segment, chunk_duration_ms=600_000, overlap_ms=30_0
     return chunks
 
 def build_prompt_vocabulary(custom_vocab):
-    # Prompt semilla fuerte para forzar español, formalidad y puntuación
-    base_prompt = "A continuación, una transcripción detallada en español con puntuación perfecta de un reporte de medios y actualidad:"
-    if not custom_vocab or not custom_vocab.strip(): return base_prompt
+    if not custom_vocab or not custom_vocab.strip(): return None
     terms = [t.strip() for line in custom_vocab.replace(",", "\n").split("\n") for t in [line.strip()] if t and len(t) > 1]
-    if terms:
-        return base_prompt + " Vocabulario clave: " + ". ".join(terms) + "."
-    return base_prompt
+    return ". ".join(terms) + "." if terms else None
 
 def transcribe_single(client, path, model, prompt=None, max_retries=3):
     for attempt in range(max_retries):
@@ -802,6 +796,11 @@ def transcribe_complete(client, path, model, prompt=None, ps=None):
         except: pass
     if not all_res: return None, None, dur_ms, 0, [], nc
     merged, ft = merge_chunk_segments(all_res, overlap_ms=30_000)
+    
+    # [INTEGRACIÓN MEJORA 2] Filtrar alucinaciones antes de calcular cobertura
+    merged = filter_hallucinations(merged)
+    ft = " ".join(s["text"] for s in merged if not s.get("hallucination_suspect"))
+
     cov = calculate_coverage(merged, ds); gaps = find_coverage_gaps(merged, ds)
     for pn in range(3):
         if cov >= 99.5: break
@@ -825,6 +824,68 @@ def transcribe_complete(client, path, model, prompt=None, ps=None):
 # ============================================================
 # POST-PROCESAMIENTO
 # ============================================================
+
+# [INTEGRACIÓN MEJORA 2] Filtro de alucinaciones de Whisper
+def filter_hallucinations(segments, min_unique_ratio=0.4, max_repeat_ratio=0.7):
+    """
+    Detecta y elimina segmentos que probablemente son alucinaciones de Whisper.
+    Criterios:
+    - Segmentos que repiten casi literalmente el anterior (Whisper "se atora")
+    - Segmentos con ratio de palabras únicas muy bajo (el modelo repite las mismas 2-3 palabras)
+    - Segmentos sospechosamente cortos en un gap largo de audio
+    """
+    if not segments:
+        return segments
+
+    cleaned = []
+    for i, seg in enumerate(segments):
+        text = seg.get("text", "").strip()
+        if not text:
+            continue
+
+        words = text.lower().split()
+        n_words = len(words)
+
+        # 1. Segmento demasiado corto para ser real (menos de 2 palabras)
+        if n_words < 2:
+            cleaned.append(seg)
+            continue
+
+        # 2. Ratio de palabras únicas — detecta loops tipo "gracias gracias gracias"
+        unique_ratio = len(set(words)) / n_words
+        if unique_ratio < min_unique_ratio and n_words > 4:
+            # Marcar como posible alucinación en lugar de eliminar
+            seg = dict(seg)
+            seg["hallucination_suspect"] = True
+            seg["text"] = f"[⚠️ segmento dudoso: {text[:60]}]"
+            cleaned.append(seg)
+            continue
+
+        # 3. Comparar con el segmento anterior — Whisper a veces repite el mismo párrafo
+        if cleaned:
+            prev_text = norm(cleaned[-1].get("text", ""))
+            curr_text = norm(text)
+            similarity = SequenceMatcher(None, prev_text, curr_text).ratio()
+            if similarity > max_repeat_ratio:
+                # Es una repetición — descartar el actual
+                continue
+
+        # 4. Frases fantasma conocidas que Whisper genera en silencio
+        PHANTOM_PHRASES = [
+            "suscríbete", "subscríbete", "subscribe",
+            "gracias por ver", "thanks for watching",
+            "no olvides darle like", "like y suscríbete",
+            "música", "music", "[música]", "[music]",
+            "subtítulos por", "subtitles by",
+        ]
+        is_phantom = any(p in text.lower() for p in PHANTOM_PHRASES)
+        if is_phantom and n_words < 8:
+            continue
+
+        cleaned.append(seg)
+
+    return cleaned
+
 def post_correct_with_vocabulary(client, text, segments, custom_vocab):
     if not custom_vocab or not custom_vocab.strip(): return text, segments
     vocab_terms = [t.strip() for line in custom_vocab.replace(",", "\n").split("\n") for t in [line.strip()] if t and len(t) > 1]
@@ -867,19 +928,9 @@ def post_correct_with_vocabulary(client, text, segments, custom_vocab):
     except: return text, segments
 
 def _correct_chunk(client, text):
-    system_prompt = (
-        "Eres un corrector ortográfico automatizado. Tu ÚNICA tarea es corregir tildes, "
-        "mayúsculas y signos de puntuación de una transcripción de audio.\n\n"
-        "REGLAS ESTRICTAS:\n"
-        "1. NO cambies el orden de las palabras.\n"
-        "2. NO agregues palabras nuevas.\n"
-        "3. NO elimines palabras, incluso si parecen muletillas o redundancias.\n"
-        "4. NO resumas el texto.\n\n"
-        "Devuelve únicamente el texto corregido sin introducciones."
-    )
     try:
         r = client.chat.completions.create(model="llama-3.3-70b-versatile",
-            messages=[{"role": "system", "content": system_prompt},
+            messages=[{"role": "system", "content": "Eres un corrector ortográfico. SOLO corrige tildes, mayúsculas y puntuación. NO cambies, elimines ni agregues palabras. Devuelve únicamente el texto corregido."},
                       {"role": "user", "content": text}], temperature=0.0)
         out = r.choices[0].message.content.strip()
         for p in ["Aquí", "Texto corregido", "Corrección"]:
@@ -1027,6 +1078,7 @@ def _parse_entities_json(raw_content):
 
     if result:
         return result
+
     return None
 
 
@@ -1293,7 +1345,7 @@ def process_audio(client, uploaded, model, do_correct, custom_vocab=""):
             st.session_state.transcript_text = full_text
             st.session_state.corrected_segments = segments
             st.session_state.correction_applied = False
-        st.session_state.audio_start_time = 0; st.session_state._audio_widget_key = st.session_state.get("_audio_widget_key", 0) + 1
+        st.session_state.audio_start_time = 0; st.session_state._audio_widget_key = 0
         wc = len(full_text.split())
         cov_icon = "✅" if coverage >= 95 else "⚠️" if coverage >= 80 else "❌"
         status.update(label=f"{cov_icon} {wc:,} palabras · {coverage:.0f}% cobertura", state="complete", expanded=False)
@@ -1373,6 +1425,29 @@ def main_app():
             st.markdown("<div style='font-size:0.7rem;color:#059669;background:#ecfdf5;padding:5px 9px;border-radius:6px;border:1px solid #a7f3d0'>✅ pydub + ffmpeg OK</div>", unsafe_allow_html=True)
         else:
             st.markdown(f"<div style='font-size:0.7rem;color:#d97706;background:#fffbeb;padding:5px 9px;border-radius:6px;border:1px solid #fcd34d'>⚠️ {pydub_msg}</div>", unsafe_allow_html=True)
+
+        # ── NUEVO AUDIO (sidebar) — [INTEGRACIÓN MEJORA 1] ──────────────────────────────────
+        st.markdown("---")
+        st.markdown("##### ➕ Nuevo audio")
+
+        if st.session_state.transcript_text:
+            if len(st.session_state.audio_history) >= MAX_HISTORY:
+                st.caption(f"⚠️ Historial lleno ({MAX_HISTORY} audios). Elimina uno desde la pestaña Global.")
+            else:
+                new_file_sidebar = st.file_uploader(
+                    "Subir audio",
+                    type=["mp3", "wav", "m4a", "ogg", "mp4"],
+                    label_visibility="collapsed",
+                    key="upload_sidebar"
+                )
+                if new_file_sidebar:
+                    vocab_sb = st.session_state.get("custom_vocabulary", "") or custom_vocab
+                    if st.button("🚀 Transcribir este audio", type="primary", use_container_width=True, key="proc_sidebar"):
+                        if process_audio(client, new_file_sidebar, model, do_correct, custom_vocab=vocab_sb):
+                            st.rerun()
+        else:
+            st.caption("Sube tu primer audio abajo ↓")
+
         st.markdown("---")
         if st.button("🚪 Cerrar sesión", use_container_width=True):
             for k in list(st.session_state.keys()): del st.session_state[k]
@@ -1411,22 +1486,20 @@ def main_app():
                     else:
                         st.button(f"✓ {fn}", key=f"active_{h['id']}", use_container_width=True, disabled=True)
 
-    # ── CARGA SUPERIOR (SIEMPRE VISIBLE / PREDETERMINADA) ──
-    is_empty = not bool(st.session_state.transcript_text)
-    with st.expander("📁 Subir nuevo audio", expanded=is_empty):
-        col_up1, col_up2 = st.columns([3, 1])
-        with col_up1:
-            uploaded = st.file_uploader("Subir archivo", type=["mp3","wav","m4a","ogg","mp4"], label_visibility="collapsed", key=f"upload_top_{st.session_state._audio_widget_key}")
-        with col_up2:
-            if uploaded and st.button("🚀 Transcribir", type="primary", use_container_width=True, key="btn_transcribe_top"):
-                vocab = st.session_state.get("sidebar_vocab", "") or custom_vocab
-                if process_audio(client, uploaded, model, do_correct, custom_vocab=vocab): st.rerun()
-
     # ── SIN TRANSCRIPCIÓN ──
-    if is_empty:
-        st.markdown('<div class="empty-state"><div class="empty-state-icon">📂</div>'
-                    '<div class="empty-state-title">Esperando archivo de audio</div>'
-                    '<div class="empty-state-text">Sube tu MP3, WAV o MP4 en el panel superior</div></div>', unsafe_allow_html=True)
+    if not st.session_state.transcript_text:
+        _, col_c, _ = st.columns([1, 2, 1])
+        with col_c:
+            st.markdown('<div class="empty-state"><div class="empty-state-icon">📂</div>'
+                        '<div class="empty-state-title">Sube un archivo de audio</div>'
+                        '<div class="empty-state-text">MP3, WAV, M4A, OGG o MP4</div></div>', unsafe_allow_html=True)
+            uploaded = st.file_uploader("x", type=["mp3","wav","m4a","ogg","mp4"], label_visibility="collapsed", key="upload_initial")
+            st.markdown("---")
+            with st.expander("📝 Vocabulario personalizado", expanded=False):
+                initial_vocab = st.text_area("Vocabulario", placeholder="Bedout\nstreaming", height=100, label_visibility="collapsed", key="initial_vocab")
+            if uploaded and st.button("🚀 Transcribir", type="primary", use_container_width=True):
+                vocab = st.session_state.get("initial_vocab", "") or custom_vocab
+                if process_audio(client, uploaded, model, do_correct, custom_vocab=vocab): st.rerun()
         return
 
     # ══════════════════════════════════════════════
@@ -1434,7 +1507,6 @@ def main_app():
     # ══════════════════════════════════════════════
     txt = st.session_state.transcript_text
 
-    # Garantizar que txt sea siempre un string
     if not isinstance(txt, str):
         txt = str(txt) if txt is not None else ""
         st.session_state.transcript_text = txt
@@ -1448,365 +1520,455 @@ def main_app():
     fname_display = st.session_state.uploaded_filename or "audio"
     wpm = round(n_words / max(duration/60, 1)) if duration > 0 else 0
 
-    # ── REPRODUCTOR FIJO ──
-    if st.session_state.audio_path:
-        p1, p2 = st.columns([0.15, 1])
-        with p1:
-            st.markdown(f"<div style='font-size:0.72rem;color:var(--text-secondary);padding-top:12px'>🎵 <strong>{fname_display[:20]}</strong></div>", unsafe_allow_html=True)
-        with p2:
+    # ══════════════════════════════════════════════════════════
+    # LAYOUT PRINCIPAL — [INTEGRACIÓN MEJORA 3]
+    # columna izquierda fija + columna derecha con tabs
+    # ══════════════════════════════════════════════════════════
+    left_col, right_col = st.columns([0.33, 0.67], gap="medium")
+
+    with left_col:
+        # ── REPRODUCTOR ──
+        if st.session_state.audio_path:
+            st.markdown("<div class='panel-header'>🎵 Reproductor</div>", unsafe_allow_html=True)
+            st.markdown(f"<div style='font-size:0.72rem;color:var(--text-secondary);margin-bottom:4px'>📁 <strong>{fname_display[:28]}</strong></div>", unsafe_allow_html=True)
             st.audio(st.session_state.audio_path, start_time=st.session_state.audio_start_time)
 
-    inject_audio_js()
+        inject_audio_js()
 
-    # ── STATS ──
-    corr_chip = "stat-chip stat-chip-ok" if st.session_state.correction_applied else "stat-chip"
-    corr_text = "✓ Corregido" if st.session_state.correction_applied else "Original"
-    cov_chip = "stat-chip stat-chip-ok" if coverage >= 95 else "stat-chip stat-chip-warn" if coverage >= 80 else "stat-chip"
-    cov_icon = "✅" if coverage >= 95 else "⚠️" if coverage >= 80 else "❌"
-    chunk_html = f'<span class="stat-chip">✂️ <strong>{chunks_used}</strong> partes</span>' if chunks_used > 1 else ""
-    gap_html = f'<span class="stat-chip stat-chip-warn">🕳️ <strong>{len(gaps)}</strong> huecos</span>' if gaps else ""
-    vocab_chip = '<span class="stat-chip stat-chip-ok">📝 Vocabulario</span>' if st.session_state.get("custom_vocabulary", "").strip() else ""
-    st.markdown(f'<div class="stats-bar"><span class="stat-chip">⏱️ <strong>{fmt_duration(duration)}</strong></span>'
-                f'<span class="stat-chip"><strong>{n_words:,}</strong> palabras</span>'
-                f'<span class="stat-chip"><strong>{wpm}</strong> pal/min</span>'
-                f'<span class="{cov_chip}">{cov_icon} <strong>{coverage:.0f}%</strong></span>'
-                f'<span class="{corr_chip}">{corr_text}</span>{chunk_html}{gap_html}{vocab_chip}</div>', unsafe_allow_html=True)
+        # ── STATS COMPACTAS ──
+        corr_chip = "stat-chip stat-chip-ok" if st.session_state.correction_applied else "stat-chip"
+        corr_text = "✓ Corregido" if st.session_state.correction_applied else "Original"
+        cov_chip = "stat-chip stat-chip-ok" if coverage >= 95 else "stat-chip stat-chip-warn" if coverage >= 80 else "stat-chip"
+        cov_icon = "✅" if coverage >= 95 else "⚠️" if coverage >= 80 else "❌"
+        chunk_html = f'<span class="stat-chip">✂️ <strong>{chunks_used}</strong> partes</span>' if chunks_used > 1 else ""
+        gap_html = f'<span class="stat-chip stat-chip-warn">🕳️ <strong>{len(gaps)}</strong> huecos</span>' if gaps else ""
+        vocab_chip = '<span class="stat-chip stat-chip-ok">📝 Vocabulario</span>' if st.session_state.get("custom_vocabulary", "").strip() else ""
 
-    if coverage < 100:
-        cc = "coverage-ok" if coverage >= 95 else "coverage-warn" if coverage >= 80 else "coverage-bad"
-        st.markdown(f'<div class="coverage-bar-container"><div class="coverage-bar-fill {cc}" style="width:{coverage}%">{coverage:.1f}%</div></div>', unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="stats-bar" style="flex-direction:column;align-items:flex-start;gap:4px">'
+            f'<span class="stat-chip">⏱️ <strong>{fmt_duration(duration)}</strong></span>'
+            f'<span class="stat-chip"><strong>{n_words:,}</strong> palabras · <strong>{wpm}</strong> pal/min</span>'
+            f'<span class="{cov_chip}">{cov_icon} Cobertura <strong>{coverage:.0f}%</strong></span>'
+            f'<span class="{corr_chip}">{corr_text}</span>{chunk_html}{gap_html}{vocab_chip}</div>',
+            unsafe_allow_html=True
+        )
 
-    # ── TABS ──
-    tab_busqueda, tab_entidades, tab_global, tab_chat, tab_analisis, tab_export = st.tabs([
-        "🔍 Búsqueda", "🏷️ Entidades", "🌐 Global", "💬 Chat IA", "📊 Análisis", "📥 Exportar"
-    ])
+        if coverage < 100:
+            cc = "coverage-ok" if coverage >= 95 else "coverage-warn" if coverage >= 80 else "coverage-bad"
+            st.markdown(
+                f'<div class="coverage-bar-container"><div class="coverage-bar-fill {cc}" style="width:{coverage}%">{coverage:.1f}%</div></div>',
+                unsafe_allow_html=True
+            )
 
-    # ════════════════════════════════════════
-    # TAB: BÚSQUEDA
-    # ════════════════════════════════════════
-    with tab_busqueda:
-        def execute_search():
-            q = st.session_state.get("q_input", "").strip()
-            if q: st.session_state.last_search_query = q; st.session_state._search_pending = True
+        # ── SEGMENTOS CON TIMESTAMPS ──
+        st.markdown("<div class='panel-header' style='margin-top:10px'>⏱️ Segmentos</div>", unsafe_allow_html=True)
 
-        sq1, sq2 = st.columns([5, 0.7])
-        with sq1:
-            st.text_input("q", placeholder="🔍 Buscar palabra o frase...", label_visibility="collapsed", key="q_input", on_change=execute_search)
-        with sq2:
-            if st.button("✕", key="clear_search", use_container_width=True):
-                st.session_state.search_results = None; st.session_state.last_search_query = ""; st.rerun()
+        sq_left = st.text_input(
+            "seg_search",
+            placeholder="Filtrar segmentos...",
+            label_visibility="collapsed",
+            key="q_seg_left"
+        )
 
-        if st.session_state.get("_search_pending"):
-            st.session_state.search_results = search_segments(
-                st.session_state.last_search_query, st.session_state.transcript_segments,
-                st.session_state.corrected_segments, context_words=ctx_w,
-                fuzzy_thresh=fuzzy_t if use_fuzzy else 1.0)
-            st.session_state._search_pending = False
-
-        aq = st.session_state.last_search_query; res = st.session_state.search_results
-        if aq and res:
-            total_occ = count_occurrences(txt, aq)
-            st.caption(f"**{len(res)}** resultado{'s' if len(res)!=1 else ''} ({total_occ} ocurrencias) para **{aq}**")
-            for i, r in enumerate(res):
-                badge_cls = f"sr-badge-{r.get('confidence','low')}"
-                bh = f"<span class='sr-ctx'>...{r.get('before','')} </span>" if r.get('before') else ""
-                ah = f"<span class='sr-ctx'> {r.get('after','')}...</span>" if r.get('after') else ""
-                ctx = ""
-                if r.get('prev_segment') or r.get('next_segment'):
-                    cp = []
-                    if r.get('prev_segment'): cp.append(f"<span class='sr-ctx'>↑ {highlight_html(r['prev_segment'], aq)}</span>")
-                    if r.get('next_segment'): cp.append(f"<span class='sr-ctx'>↓ {highlight_html(r['next_segment'], aq)}</span>")
-                    ctx = f"<div class='sr-segment-full'>{'<br>'.join(cp)}</div>"
-                ts_btn = make_ts_button_html(max(0, r.get("start_time", 0)-2), label=r.get('time_label', '0:00'))
-                st.markdown(f"""<div class="sr-card"><div class="sr-head">{ts_btn}
-                    <span class="sr-time" style="margin-left:4px">{r.get('time_label','')} → {r.get('end_label','')}</span>
-                    <span class="sr-badge {badge_cls}">{r.get('confidence','low')}</span></div>
-                    <div class="sr-body">{bh}{r.get('match_hl','')}{ah}</div>{ctx}</div>""", unsafe_allow_html=True)
-        elif aq and res is not None and len(res) == 0:
-            st.markdown('<div class="no-results-box">🔍 Sin resultados.</div>', unsafe_allow_html=True)
-
-        st.markdown("---")
-        st.markdown("##### 📄 Texto completo")
-        if aq:
-            t_count = count_occurrences(txt, aq)
-            if t_count > 0: st.caption(f"🔶 {t_count} ocurrencias resaltadas")
-        st.markdown(f"<div class='full-text-box'>{highlight_full_text(txt, aq) if aq else txt}</div>", unsafe_allow_html=True)
+        render_segment_viewer(
+            segs,
+            active_idx=st.session_state.active_segment_idx,
+            search_query=sq_left,
+            max_height="420px"
+        )
 
         if gaps:
-            st.markdown("---")
-            with st.expander(f"⚠️ {len(gaps)} huecos", expanded=False):
+            with st.expander(f"⚠️ {len(gaps)} huecos detectados", expanded=False):
                 for gap in gaps:
-                    ts_btn = make_ts_button_html(max(0, gap["start"]-1))
-                    st.markdown(f"{ts_btn} `{fmt_time(gap['start'])}` → `{fmt_time(gap['end'])}` — **{gap['duration']:.1f}s**", unsafe_allow_html=True)
-
-    # ════════════════════════════════════════
-    # TAB: ENTIDADES
-    # ════════════════════════════════════════
-    with tab_entidades:
-        ent_col1, ent_col2 = st.columns([1, 1])
-
-        with ent_col1:
-            st.markdown("<div class='panel-header'>🏷️ Extracción de Entidades</div>", unsafe_allow_html=True)
-
-            btn_col1, btn_col2 = st.columns(2)
-            with btn_col1:
-                if st.button("🏷️ Extraer Entidades", type="primary", use_container_width=True):
-                    st.session_state.entities = None
-                    st.session_state._entities_error = None
-                    with st.spinner("Extrayendo entidades..."):
-                        extracted = extract_entities(client, txt)
-                    st.rerun()
-
-            with btn_col2:
-                if st.button("📰 Generar Lead", use_container_width=True):
-                    st.session_state.lead_cache = None
-                    with st.spinner("Generando titular y lead..."):
-                        _ = generate_lead(client, txt, fname_display)
-                    st.rerun()
-
-            if st.session_state.get("_entities_error") and st.session_state.entities is not None:
-                all_empty = all(
-                    len(v) == 0
-                    for v in st.session_state.entities.values()
-                    if isinstance(v, list)
-                )
-                if all_empty:
+                    ts_btn = make_ts_button_html(max(0, gap["start"] - 1))
                     st.markdown(
-                        f"<div class='ent-error-box'>⚠️ No se pudieron extraer entidades. "
-                        f"Intenta de nuevo.<br><small>{st.session_state._entities_error}</small></div>",
+                        f"{ts_btn} `{fmt_time(gap['start'])}` → `{fmt_time(gap['end'])}` — **{gap['duration']:.1f}s**",
                         unsafe_allow_html=True
                     )
 
-            if st.session_state.entities is not None:
-                all_empty = all(
-                    len(v) == 0
-                    for v in st.session_state.entities.values()
-                    if isinstance(v, list)
+    # ── COLUMNA DERECHA: TABS ──────────────────────────────────
+    with right_col:
+        tab_busqueda, tab_entidades, tab_global, tab_chat, tab_analisis, tab_export = st.tabs([
+            "🔍 Búsqueda", "🏷️ Entidades", "🌐 Global", "💬 Chat IA", "📊 Análisis", "📥 Exportar"
+        ])
+
+        # ════════════════════════════════════════
+        # TAB: BÚSQUEDA
+        # ════════════════════════════════════════
+        with tab_busqueda:
+            def execute_search():
+                q = st.session_state.get("q_input", "").strip()
+                if q:
+                    st.session_state.last_search_query = q
+                    st.session_state._search_pending = True
+
+            sq1, sq2 = st.columns([5, 0.7])
+            with sq1:
+                st.text_input("q", placeholder="🔍 Buscar palabra o frase...", label_visibility="collapsed", key="q_input", on_change=execute_search)
+            with sq2:
+                if st.button("✕", key="clear_search", use_container_width=True):
+                    st.session_state.search_results = None
+                    st.session_state.last_search_query = ""
+                    st.rerun()
+
+            if st.session_state.get("_search_pending"):
+                st.session_state.search_results = search_segments(
+                    st.session_state.last_search_query,
+                    st.session_state.transcript_segments,
+                    st.session_state.corrected_segments,
+                    context_words=ctx_w,
+                    fuzzy_thresh=fuzzy_t if use_fuzzy else 1.0
                 )
-                if not all_empty:
-                    st.markdown("---")
-                    render_entity_panel(st.session_state.entities)
+                st.session_state._search_pending = False
 
-            if st.session_state.lead_cache:
-                st.markdown("---")
-                lead = st.session_state.lead_cache
-                st.markdown(f"""
-                <div class="lead-box">
-                    <div class="lead-label">📰 Titular</div>
-                    <div class="lead-titular">{lead.get('titular', '')}</div>
-                    <div class="lead-subtitular">{lead.get('subtitulo', '')}</div>
-                    <div class="lead-label">🔰 Lead</div>
-                    <div class="lead-body">{lead.get('lead', '')}</div>
-                    <div style="margin-top:10px">
-                        <div class="lead-label">🗂️ Contexto</div>
-                        <div class="lead-body">{lead.get('contexto', '')}</div>
-                    </div>
-                </div>""", unsafe_allow_html=True)
+            aq = st.session_state.last_search_query
+            res = st.session_state.search_results
 
-        with ent_col2:
-            st.markdown("<div class='panel-header'>📄 Transcripción con Entidades</div>", unsafe_allow_html=True)
-
-            view_mode = st.radio("Vista", ["Texto", "Segmentos"], horizontal=True,
-                                 label_visibility="collapsed", key="view_mode_ent")
-
-            if view_mode == "Texto":
-                show_ents = st.checkbox("Resaltar entidades en texto", value=True, key="show_ents_check",
-                                        disabled=(st.session_state.entities is None))
-                display_txt = txt
-                if show_ents and st.session_state.entities:
-                    display_txt = highlight_entities_in_text(txt, st.session_state.entities)
-                st.markdown(f"<div class='full-text-box'>{display_txt}</div>", unsafe_allow_html=True)
-            else:
-                render_segment_viewer(segs, active_idx=st.session_state.active_segment_idx, max_height="560px")
-
-    # ════════════════════════════════════════
-    # TAB: GLOBAL
-    # ════════════════════════════════════════
-    with tab_global:
-        if len(hist) <= 1:
-            st.markdown('<div class="empty-state"><div class="empty-state-icon">🌐</div>'
-                        '<div class="empty-state-title">Agrega más audios</div>'
-                        '<div class="empty-state-text">Necesitas al menos 2</div></div>', unsafe_allow_html=True)
-        else:
-            def execute_global_search():
-                q = st.session_state.get("gq_input", "").strip()
-                if q: st.session_state.last_global_query = q; st.session_state._global_search_pending = True
-                else: st.session_state.global_search_results = None; st.session_state.last_global_query = ""
-            st.text_input("gq", placeholder=f"Buscar en {len(hist)} archivos...", label_visibility="collapsed", key="gq_input", on_change=execute_global_search)
-            if st.session_state.get("_global_search_pending"):
-                st.session_state.global_search_results = global_search(st.session_state.last_global_query, hist, fuzzy_thresh=fuzzy_t if use_fuzzy else 1.0)
-                st.session_state._global_search_pending = False
-            gres = st.session_state.global_search_results; gaq = st.session_state.last_global_query
-            if gaq and gres:
-                st.caption(f"**{len(gres)}** resultados para **{gaq}**")
-                by_file = {}
-                for r in gres: by_file.setdefault(r.get("audio_name", "audio"), []).append(r)
-                for fn, fres in by_file.items():
-                    with st.expander(f"📁 {fn} — {len(fres)} resultados", expanded=True):
-                        for i, r in enumerate(fres):
-                            bc = f"sr-badge-{r.get('confidence','low')}"
-                            bh = f"<span class='sr-ctx'>...{r.get('before','')} </span>" if r.get('before') else ""
-                            ah = f"<span class='sr-ctx'> {r.get('after','')}...</span>" if r.get('after') else ""
-                            gc1, gc2 = st.columns([0.8, 5])
-                            with gc1:
-                                if st.button("▶ ir", key=f"gp_{fn}_{i}"):
-                                    aid = r.get("audio_id", "")
-                                    if aid != st.session_state.active_audio_id:
-                                        history_save_current(); history_load(aid)
-                                    jump_to_time(max(0, r.get("start_time",0)-2), r.get("idx",-1)); st.rerun()
-                            with gc2:
-                                st.markdown(f'<div class="sr-card sr-card-global"><div class="sr-head"><span class="sr-time">{r.get("time_label","")}</span><span class="sr-badge {bc}">{r.get("confidence","low")}</span></div><div class="sr-body">{bh}{r.get("match_hl","")}{ah}</div></div>', unsafe_allow_html=True)
-            elif gaq and gres is not None and len(gres) == 0:
+            if aq and res:
+                total_occ = count_occurrences(txt, aq)
+                st.caption(f"**{len(res)}** resultado{'s' if len(res) != 1 else ''} ({total_occ} ocurrencias) para **{aq}**")
+                for i, r in enumerate(res):
+                    badge_cls = f"sr-badge-{r.get('confidence', 'low')}"
+                    bh = f"<span class='sr-ctx'>...{r.get('before', '')} </span>" if r.get('before') else ""
+                    ah = f"<span class='sr-ctx'> {r.get('after', '')}...</span>" if r.get('after') else ""
+                    ctx = ""
+                    if r.get('prev_segment') or r.get('next_segment'):
+                        cp = []
+                        if r.get('prev_segment'):
+                            cp.append(f"<span class='sr-ctx'>↑ {highlight_html(r['prev_segment'], aq)}</span>")
+                        if r.get('next_segment'):
+                            cp.append(f"<span class='sr-ctx'>↓ {highlight_html(r['next_segment'], aq)}</span>")
+                        ctx = f"<div class='sr-segment-full'>{'<br>'.join(cp)}</div>"
+                    ts_btn = make_ts_button_html(max(0, r.get("start_time", 0) - 2), label=r.get('time_label', '0:00'))
+                    st.markdown(f"""<div class="sr-card"><div class="sr-head">{ts_btn}
+                        <span class="sr-time" style="margin-left:4px">{r.get('time_label', '')} → {r.get('end_label', '')}</span>
+                        <span class="sr-badge {badge_cls}">{r.get('confidence', 'low')}</span></div>
+                        <div class="sr-body">{bh}{r.get('match_hl', '')}{ah}</div>{ctx}</div>""", unsafe_allow_html=True)
+            elif aq and res is not None and len(res) == 0:
                 st.markdown('<div class="no-results-box">🔍 Sin resultados.</div>', unsafe_allow_html=True)
 
             st.markdown("---")
-            st.markdown("##### 📚 Audios en sesión")
-            for h in hist:
-                active = h["id"] == st.session_state.active_audio_id
-                dur = fmt_duration(get_audio_duration(h.get("corrected_segments") or []))
-                wc = len((h.get("transcript_text") or "").split())
-                hc1, hc2, hc3 = st.columns([3, 1, 1])
-                with hc1:
-                    st.markdown(f"<div class='hist-card {'active' if active else ''}'><div class='hist-card-name'>📁 {h.get('uploaded_filename','audio')}{' ← activo' if active else ''}</div><div class='hist-card-meta'>⏱ {dur} · {wc:,} palabras</div></div>", unsafe_allow_html=True)
-                with hc2:
-                    if not active and st.button("Cargar", key=f"hl_{h['id']}"):
-                        history_save_current(); history_load(h["id"]); st.rerun()
-                with hc3:
-                    if st.button("🗑", key=f"hd_{h['id']}"):
-                        st.session_state.audio_history = [x for x in st.session_state.audio_history if x["id"] != h["id"]]
-                        if active and st.session_state.audio_history: history_load(st.session_state.audio_history[-1]["id"])
-                        elif not st.session_state.audio_history: reset_current_audio(); st.session_state.active_audio_id = None
+            st.markdown("##### 📄 Texto completo")
+            if aq:
+                t_count = count_occurrences(txt, aq)
+                if t_count > 0:
+                    st.caption(f"🔶 {t_count} ocurrencias resaltadas")
+            st.markdown(
+                f"<div class='full-text-box'>{highlight_full_text(txt, aq) if aq else txt}</div>",
+                unsafe_allow_html=True
+            )
+
+        # ════════════════════════════════════════
+        # TAB: ENTIDADES
+        # ════════════════════════════════════════
+        with tab_entidades:
+            ent_col1, ent_col2 = st.columns([1, 1])
+
+            with ent_col1:
+                st.markdown("<div class='panel-header'>🏷️ Extracción de Entidades</div>", unsafe_allow_html=True)
+
+                btn_col1, btn_col2 = st.columns(2)
+                with btn_col1:
+                    if st.button("🏷️ Extraer Entidades", type="primary", use_container_width=True):
+                        st.session_state.entities = None
+                        st.session_state._entities_error = None
+                        with st.spinner("Extrayendo entidades..."):
+                            extracted = extract_entities(client, txt)
+                        st.rerun()
+                with btn_col2:
+                    if st.button("📰 Generar Lead", use_container_width=True):
+                        st.session_state.lead_cache = None
+                        with st.spinner("Generando titular y lead..."):
+                            _ = generate_lead(client, txt, fname_display)
                         st.rerun()
 
-    # ════════════════════════════════════════
-    # TAB: CHAT IA
-    # ════════════════════════════════════════
-    with tab_chat:
-        if not st.session_state.chat_history:
-            st.markdown('<div class="empty-state" style="padding:20px"><div class="empty-state-icon">💬</div>'
-                        '<div class="empty-state-title">Pregunta sobre el audio</div>'
-                        '<div class="empty-state-text">Responde con timestamps y citas exactas</div></div>', unsafe_allow_html=True)
-        for msg in st.session_state.chat_history:
-            with st.chat_message(msg["role"]): st.markdown(msg["content"])
-        if user_prompt := st.chat_input("Pregunta sobre el audio..."):
-            st.session_state.chat_history.append({"role": "user", "content": user_prompt})
-            with st.chat_message("user"): st.markdown(user_prompt)
-            with st.chat_message("assistant"):
-                ph = st.empty(); full = ""
-                try:
-                    segs_ctx = st.session_state.corrected_segments or st.session_state.transcript_segments or []
-                    ts_ctx = build_timestamped_transcript(segs_ctx)
-                    if len(ts_ctx) > 15000: ts_ctx = ts_ctx[:15000] + "\n[...truncado...]"
-                    ent_ctx = ""
-                    if st.session_state.entities:
-                        ent = st.session_state.entities
-                        ent_ctx = f"\n\nENTIDADES:\nPersonas: {', '.join(ent.get('personas',[]))}\nOrganizaciones: {', '.join(ent.get('organizaciones',[]))}\nLugares: {', '.join(ent.get('lugares',[]))}"
-                    sys_p = (f"Eres un asistente periodístico. Responde SOLO con base en la transcripción.\n"
-                             f"1. Solo información explícita.\n2. Incluye [MM:SS].\n"
-                             f"3. Si no está: 'No encontré esa información.'\n4. NO inventes.\n"
-                             f"\nTRANSCRIPCIÓN:\n{ts_ctx}{ent_ctx}")
-                    stream = client.chat.completions.create(model="llama-3.3-70b-versatile",
-                        messages=[{"role": "system", "content": sys_p},
-                                  *[{"role": m["role"], "content": m["content"]} for m in st.session_state.chat_history[-6:]]],
-                        stream=True, max_tokens=2048, temperature=0.1)
-                    for chunk in stream:
-                        if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
-                            full += chunk.choices[0].delta.content; ph.markdown(full + "▌")
-                    ph.markdown(full)
-                    st.session_state.chat_history.append({"role": "assistant", "content": full})
-                except Exception as ex: st.error(f"Error: {ex}")
-        if st.session_state.chat_history and st.button("🗑️ Limpiar conversación"):
-            st.session_state.chat_history = []; st.rerun()
+                if st.session_state.get("_entities_error") and st.session_state.entities is not None:
+                    all_empty = all(len(v) == 0 for v in st.session_state.entities.values() if isinstance(v, list))
+                    if all_empty:
+                        st.markdown(
+                            f"<div class='ent-error-box'>⚠️ No se pudieron extraer entidades. "
+                            f"Intenta de nuevo.<br><small>{st.session_state._entities_error}</small></div>",
+                            unsafe_allow_html=True
+                        )
 
-    # ════════════════════════════════════════
-    # TAB: ANÁLISIS
-    # ════════════════════════════════════════
-    with tab_analisis:
-        chars = len(txt); sentences = len(re.split(r'[.!?]+', txt))
-        st.markdown(f"""<div class="kpi-grid">
-            <div class="kpi-card"><div class="kpi-value">{n_words:,}</div><div class="kpi-label">Palabras</div></div>
-            <div class="kpi-card"><div class="kpi-value">{sentences}</div><div class="kpi-label">Oraciones</div></div>
-            <div class="kpi-card"><div class="kpi-value">{chars:,}</div><div class="kpi-label">Caracteres</div></div>
-            <div class="kpi-card"><div class="kpi-value">{wpm}</div><div class="kpi-label">Pal/min</div></div>
-            <div class="kpi-card"><div class="kpi-value">{fmt_duration(duration)}</div><div class="kpi-label">Duración</div></div>
-            <div class="kpi-card"><div class="kpi-value">{coverage:.0f}%</div><div class="kpi-label">Cobertura</div></div>
-        </div>""", unsafe_allow_html=True)
-        st.markdown("---")
-        an1, an2 = st.columns(2)
-        with an1:
-            if st.button("📝 Resumen", use_container_width=True, type="primary"):
-                with st.spinner("Generando..."): generate_summary(client, txt)
-            if "summary" in st.session_state.analysis_cache:
-                with st.expander("📝 Resumen", expanded=True): st.markdown(st.session_state.analysis_cache["summary"])
-        with an2:
-            if st.button("🏷️ Temas", use_container_width=True, type="primary"):
-                with st.spinner("Extrayendo..."): generate_topics(client, txt)
-            if "topics" in st.session_state.analysis_cache:
-                with st.expander("🏷️ Temas", expanded=True): st.markdown(st.session_state.analysis_cache["topics"])
-        st.markdown("---")
-        an3, an4 = st.columns(2)
-        with an3:
-            if st.button("✅ Tareas y Decisiones", use_container_width=True):
-                with st.spinner("Extrayendo..."): generate_action_items(client, txt)
-            if "actions" in st.session_state.analysis_cache:
-                with st.expander("✅ Tareas", expanded=True): st.markdown(st.session_state.analysis_cache["actions"])
-        with an4:
-            if st.button("🎭 Análisis de Tono", use_container_width=True):
-                with st.spinner("Analizando..."): generate_sentiment(client, txt)
-            if "sentiment" in st.session_state.analysis_cache:
-                with st.expander("🎭 Tono", expanded=True): st.markdown(st.session_state.analysis_cache["sentiment"])
-        st.markdown("---")
-        st.markdown("##### 📈 Palabras más frecuentes")
-        words_clean = re.findall(r'\b[a-záéíóúñü]{3,}\b', txt.lower())
-        wf = {}
-        for w in words_clean:
-            if w not in STOPWORDS_ES: wf[w] = wf.get(w, 0) + 1
-        top = sorted(wf.items(), key=lambda x: x[1], reverse=True)[:20]
-        if top:
-            mx = top[0][1]
-            bars = "".join(f"<div class='wf-row'><span class='wf-word'>{w}</span><div class='wf-bar-bg'><div class='wf-bar-fill' style='width:{max((f/mx)*100,5)}%'></div></div><span class='wf-count'>{f}</span></div>" for w, f in top)
-            st.markdown(bars, unsafe_allow_html=True)
+                if st.session_state.entities is not None:
+                    all_empty = all(len(v) == 0 for v in st.session_state.entities.values() if isinstance(v, list))
+                    if not all_empty:
+                        st.markdown("---")
+                        render_entity_panel(st.session_state.entities)
 
-    # ════════════════════════════════════════
-    # TAB: EXPORTAR
-    # ════════════════════════════════════════
-    with tab_export:
-        st.markdown("##### 📥 Exportar")
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            st.download_button("📄 Texto (.txt)", data=txt, file_name=f"{fname_display}_transcripcion.txt", mime="text/plain", use_container_width=True)
-        with c2:
-            srt = []
-            for i, seg in enumerate(segs):
-                s, e = float(seg.get("start",0)), float(seg.get("end",0))
-                srt.extend([f"{i+1}", f"{int(s//3600):02d}:{int((s%3600)//60):02d}:{s%60:06.3f} --> {int(e//3600):02d}:{int((e%3600)//60):02d}:{e%60:06.3f}", seg.get("text",""), ""])
-            st.download_button("🎬 Subtítulos (.srt)", data="\n".join(srt), file_name=f"{fname_display}.srt", mime="text/plain", use_container_width=True)
-        with c3:
-            ts_lines = [f"[{fmt_time(float(seg.get('start',0)))}] {seg.get('text','')}" for seg in segs]
-            st.download_button("⏱️ Timestamps (.txt)", data="\n".join(ts_lines), file_name=f"{fname_display}_timestamps.txt", mime="text/plain", use_container_width=True)
-        st.markdown("---")
-        c4, c5 = st.columns(2)
-        with c4:
-            json_data = {"filename": fname_display, "date": datetime.now().isoformat(), "duration_seconds": duration,
-                         "word_count": n_words, "coverage_percent": coverage, "entities": st.session_state.entities,
-                         "lead": st.session_state.lead_cache, "full_text": txt, "segments": segs}
-            st.download_button("🗂️ JSON completo", data=json.dumps(json_data, ensure_ascii=False, indent=2),
-                               file_name=f"{fname_display}.json", mime="application/json", use_container_width=True)
-        with c5:
-            if st.session_state.analysis_cache or st.session_state.lead_cache:
-                ae = {"filename": fname_display, "lead": st.session_state.lead_cache,
-                      "entities": st.session_state.entities, "analyses": st.session_state.analysis_cache}
-                st.download_button("📊 Análisis (.json)", data=json.dumps(ae, ensure_ascii=False, indent=2),
-                                   file_name=f"{fname_display}_analisis.json", mime="application/json", use_container_width=True)
+                if st.session_state.lead_cache:
+                    st.markdown("---")
+                    lead = st.session_state.lead_cache
+                    st.markdown(f"""
+                    <div class="lead-box">
+                        <div class="lead-label">📰 Titular</div>
+                        <div class="lead-titular">{lead.get('titular', '')}</div>
+                        <div class="lead-subtitular">{lead.get('subtitulo', '')}</div>
+                        <div class="lead-label">🔰 Lead</div>
+                        <div class="lead-body">{lead.get('lead', '')}</div>
+                        <div style="margin-top:10px">
+                            <div class="lead-label">🗂️ Contexto</div>
+                            <div class="lead-body">{lead.get('contexto', '')}</div>
+                        </div>
+                    </div>""", unsafe_allow_html=True)
+
+            with ent_col2:
+                st.markdown("<div class='panel-header'>📄 Transcripción con Entidades</div>", unsafe_allow_html=True)
+                view_mode = st.radio("Vista", ["Texto", "Segmentos"], horizontal=True,
+                                     label_visibility="collapsed", key="view_mode_ent")
+                if view_mode == "Texto":
+                    show_ents = st.checkbox("Resaltar entidades en texto", value=True, key="show_ents_check",
+                                            disabled=(st.session_state.entities is None))
+                    display_txt = txt
+                    if show_ents and st.session_state.entities:
+                        display_txt = highlight_entities_in_text(txt, st.session_state.entities)
+                    st.markdown(f"<div class='full-text-box'>{display_txt}</div>", unsafe_allow_html=True)
+                else:
+                    render_segment_viewer(segs, active_idx=st.session_state.active_segment_idx, max_height="560px")
+
+        # ════════════════════════════════════════
+        # TAB: GLOBAL
+        # ════════════════════════════════════════
+        with tab_global:
+            if len(hist) <= 1:
+                st.markdown('<div class="empty-state"><div class="empty-state-icon">🌐</div>'
+                            '<div class="empty-state-title">Agrega más audios</div>'
+                            '<div class="empty-state-text">Necesitas al menos 2</div></div>', unsafe_allow_html=True)
             else:
-                st.button("📊 Análisis (.json)", disabled=True, use_container_width=True)
-        if len(hist) > 1:
+                def execute_global_search():
+                    q = st.session_state.get("gq_input", "").strip()
+                    if q:
+                        st.session_state.last_global_query = q
+                        st.session_state._global_search_pending = True
+                    else:
+                        st.session_state.global_search_results = None
+                        st.session_state.last_global_query = ""
+
+                st.text_input("gq", placeholder=f"Buscar en {len(hist)} archivos...", label_visibility="collapsed", key="gq_input", on_change=execute_global_search)
+
+                if st.session_state.get("_global_search_pending"):
+                    st.session_state.global_search_results = global_search(
+                        st.session_state.last_global_query, hist,
+                        fuzzy_thresh=fuzzy_t if use_fuzzy else 1.0
+                    )
+                    st.session_state._global_search_pending = False
+
+                gres = st.session_state.global_search_results
+                gaq = st.session_state.last_global_query
+
+                if gaq and gres:
+                    st.caption(f"**{len(gres)}** resultados para **{gaq}**")
+                    by_file = {}
+                    for r in gres:
+                        by_file.setdefault(r.get("audio_name", "audio"), []).append(r)
+                    for fn, fres in by_file.items():
+                        with st.expander(f"📁 {fn} — {len(fres)} resultados", expanded=True):
+                            for i, r in enumerate(fres):
+                                bc = f"sr-badge-{r.get('confidence', 'low')}"
+                                bh = f"<span class='sr-ctx'>...{r.get('before', '')} </span>" if r.get('before') else ""
+                                ah = f"<span class='sr-ctx'> {r.get('after', '')}...</span>" if r.get('after') else ""
+                                gc1, gc2 = st.columns([0.8, 5])
+                                with gc1:
+                                    if st.button("▶ ir", key=f"gp_{fn}_{i}"):
+                                        aid = r.get("audio_id", "")
+                                        if aid != st.session_state.active_audio_id:
+                                            history_save_current()
+                                            history_load(aid)
+                                        jump_to_time(max(0, r.get("start_time", 0) - 2), r.get("idx", -1))
+                                        st.rerun()
+                                with gc2:
+                                    st.markdown(f'<div class="sr-card sr-card-global"><div class="sr-head"><span class="sr-time">{r.get("time_label", "")}</span><span class="sr-badge {bc}">{r.get("confidence", "low")}</span></div><div class="sr-body">{bh}{r.get("match_hl", "")}{ah}</div></div>', unsafe_allow_html=True)
+                elif gaq and gres is not None and len(gres) == 0:
+                    st.markdown('<div class="no-results-box">🔍 Sin resultados.</div>', unsafe_allow_html=True)
+
+                st.markdown("---")
+                st.markdown("##### 📚 Audios en sesión")
+                for h in hist:
+                    active = h["id"] == st.session_state.active_audio_id
+                    dur = fmt_duration(get_audio_duration(h.get("corrected_segments") or []))
+                    wc = len((h.get("transcript_text") or "").split())
+                    hc1, hc2, hc3 = st.columns([3, 1, 1])
+                    with hc1:
+                        st.markdown(f"<div class='hist-card {'active' if active else ''}'><div class='hist-card-name'>📁 {h.get('uploaded_filename', 'audio')}{' ← activo' if active else ''}</div><div class='hist-card-meta'>⏱ {dur} · {wc:,} palabras</div></div>", unsafe_allow_html=True)
+                    with hc2:
+                        if not active and st.button("Cargar", key=f"hl_{h['id']}"):
+                            history_save_current()
+                            history_load(h["id"])
+                            st.rerun()
+                    with hc3:
+                        if st.button("🗑", key=f"hd_{h['id']}"):
+                            st.session_state.audio_history = [x for x in st.session_state.audio_history if x["id"] != h["id"]]
+                            if active and st.session_state.audio_history:
+                                history_load(st.session_state.audio_history[-1]["id"])
+                            elif not st.session_state.audio_history:
+                                reset_current_audio()
+                                st.session_state.active_audio_id = None
+                            st.rerun()
+
+        # ════════════════════════════════════════
+        # TAB: CHAT IA
+        # ════════════════════════════════════════
+        with tab_chat:
+            if not st.session_state.chat_history:
+                st.markdown('<div class="empty-state" style="padding:20px"><div class="empty-state-icon">💬</div>'
+                            '<div class="empty-state-title">Pregunta sobre el audio</div>'
+                            '<div class="empty-state-text">Responde con timestamps y citas exactas</div></div>', unsafe_allow_html=True)
+            for msg in st.session_state.chat_history:
+                with st.chat_message(msg["role"]):
+                    st.markdown(msg["content"])
+            if user_prompt := st.chat_input("Pregunta sobre el audio..."):
+                st.session_state.chat_history.append({"role": "user", "content": user_prompt})
+                with st.chat_message("user"):
+                    st.markdown(user_prompt)
+                with st.chat_message("assistant"):
+                    ph = st.empty()
+                    full = ""
+                    try:
+                        segs_ctx = st.session_state.corrected_segments or st.session_state.transcript_segments or []
+                        ts_ctx = build_timestamped_transcript(segs_ctx)
+                        if len(ts_ctx) > 15000:
+                            ts_ctx = ts_ctx[:15000] + "\n[...truncado...]"
+                        ent_ctx = ""
+                        if st.session_state.entities:
+                            ent = st.session_state.entities
+                            ent_ctx = f"\n\nENTIDADES:\nPersonas: {', '.join(ent.get('personas', []))}\nOrganizaciones: {', '.join(ent.get('organizaciones', []))}\nLugares: {', '.join(ent.get('lugares', []))}"
+                        sys_p = (f"Eres un asistente periodístico. Responde SOLO con base en la transcripción.\n"
+                                 f"1. Solo información explícita.\n2. Incluye [MM:SS].\n"
+                                 f"3. Si no está: 'No encontré esa información.'\n4. NO inventes.\n"
+                                 f"\nTRANSCRIPCIÓN:\n{ts_ctx}{ent_ctx}")
+                        stream = client.chat.completions.create(
+                            model="llama-3.3-70b-versatile",
+                            messages=[
+                                {"role": "system", "content": sys_p},
+                                *[{"role": m["role"], "content": m["content"]} for m in st.session_state.chat_history[-6:]]
+                            ],
+                            stream=True, max_tokens=2048, temperature=0.1
+                        )
+                        for chunk in stream:
+                            if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
+                                full += chunk.choices[0].delta.content
+                                ph.markdown(full + "▌")
+                        ph.markdown(full)
+                        st.session_state.chat_history.append({"role": "assistant", "content": full})
+                    except Exception as ex:
+                        st.error(f"Error: {ex}")
+            if st.session_state.chat_history and st.button("🗑️ Limpiar conversación"):
+                st.session_state.chat_history = []
+                st.rerun()
+
+        # ════════════════════════════════════════
+        # TAB: ANÁLISIS
+        # ════════════════════════════════════════
+        with tab_analisis:
+            chars = len(txt)
+            sentences = len(re.split(r'[.!?]+', txt))
+            st.markdown(f"""<div class="kpi-grid">
+                <div class="kpi-card"><div class="kpi-value">{n_words:,}</div><div class="kpi-label">Palabras</div></div>
+                <div class="kpi-card"><div class="kpi-value">{sentences}</div><div class="kpi-label">Oraciones</div></div>
+                <div class="kpi-card"><div class="kpi-value">{chars:,}</div><div class="kpi-label">Caracteres</div></div>
+                <div class="kpi-card"><div class="kpi-value">{wpm}</div><div class="kpi-label">Pal/min</div></div>
+                <div class="kpi-card"><div class="kpi-value">{fmt_duration(duration)}</div><div class="kpi-label">Duración</div></div>
+                <div class="kpi-card"><div class="kpi-value">{coverage:.0f}%</div><div class="kpi-label">Cobertura</div></div>
+            </div>""", unsafe_allow_html=True)
             st.markdown("---")
-            se = {"session_date": datetime.now().isoformat(), "total_audios": len(hist),
-                  "audios": [{"filename": h.get("uploaded_filename"), "full_text": h.get("transcript_text",""),
-                              "lead": h.get("lead_cache"), "entities": h.get("entities")} for h in hist]}
-            st.download_button("📦 Sesión completa (.json)", data=json.dumps(se, ensure_ascii=False, indent=2),
-                               file_name="sesion_completa.json", mime="application/json", use_container_width=True)
+            an1, an2 = st.columns(2)
+            with an1:
+                if st.button("📝 Resumen", use_container_width=True, type="primary"):
+                    with st.spinner("Generando..."):
+                        generate_summary(client, txt)
+                if "summary" in st.session_state.analysis_cache:
+                    with st.expander("📝 Resumen", expanded=True):
+                        st.markdown(st.session_state.analysis_cache["summary"])
+            with an2:
+                if st.button("🏷️ Temas", use_container_width=True, type="primary"):
+                    with st.spinner("Extrayendo..."):
+                        generate_topics(client, txt)
+                if "topics" in st.session_state.analysis_cache:
+                    with st.expander("🏷️ Temas", expanded=True):
+                        st.markdown(st.session_state.analysis_cache["topics"])
+            st.markdown("---")
+            an3, an4 = st.columns(2)
+            with an3:
+                if st.button("✅ Tareas y Decisiones", use_container_width=True):
+                    with st.spinner("Extrayendo..."):
+                        generate_action_items(client, txt)
+                if "actions" in st.session_state.analysis_cache:
+                    with st.expander("✅ Tareas", expanded=True):
+                        st.markdown(st.session_state.analysis_cache["actions"])
+            with an4:
+                if st.button("🎭 Análisis de Tono", use_container_width=True):
+                    with st.spinner("Analizando..."):
+                        generate_sentiment(client, txt)
+                if "sentiment" in st.session_state.analysis_cache:
+                    with st.expander("🎭 Tono", expanded=True):
+                        st.markdown(st.session_state.analysis_cache["sentiment"])
+            st.markdown("---")
+            st.markdown("##### 📈 Palabras más frecuentes")
+            words_clean = re.findall(r'\b[a-záéíóúñü]{3,}\b', txt.lower())
+            wf = {}
+            for w in words_clean:
+                if w not in STOPWORDS_ES:
+                    wf[w] = wf.get(w, 0) + 1
+            top = sorted(wf.items(), key=lambda x: x[1], reverse=True)[:20]
+            if top:
+                mx = top[0][1]
+                bars = "".join(
+                    f"<div class='wf-row'><span class='wf-word'>{w}</span><div class='wf-bar-bg'><div class='wf-bar-fill' style='width:{max((f/mx)*100, 5)}%'></div></div><span class='wf-count'>{f}</span></div>"
+                    for w, f in top
+                )
+                st.markdown(bars, unsafe_allow_html=True)
+
+        # ════════════════════════════════════════
+        # TAB: EXPORTAR
+        # ════════════════════════════════════════
+        with tab_export:
+            st.markdown("##### 📥 Exportar")
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                st.download_button("📄 Texto (.txt)", data=txt,
+                                   file_name=f"{fname_display}_transcripcion.txt", mime="text/plain", use_container_width=True)
+            with c2:
+                srt = []
+                for i, seg in enumerate(segs):
+                    s, e = float(seg.get("start", 0)), float(seg.get("end", 0))
+                    srt.extend([f"{i+1}",
+                                f"{int(s//3600):02d}:{int((s%3600)//60):02d}:{s%60:06.3f} --> {int(e//3600):02d}:{int((e%3600)//60):02d}:{e%60:06.3f}",
+                                seg.get("text", ""), ""])
+                st.download_button("🎬 Subtítulos (.srt)", data="\n".join(srt),
+                                   file_name=f"{fname_display}.srt", mime="text/plain", use_container_width=True)
+            with c3:
+                ts_lines = [f"[{fmt_time(float(seg.get('start', 0)))}] {seg.get('text', '')}" for seg in segs]
+                st.download_button("⏱️ Timestamps (.txt)", data="\n".join(ts_lines),
+                                   file_name=f"{fname_display}_timestamps.txt", mime="text/plain", use_container_width=True)
+            st.markdown("---")
+            c4, c5 = st.columns(2)
+            with c4:
+                json_data = {
+                    "filename": fname_display, "date": datetime.now().isoformat(),
+                    "duration_seconds": duration, "word_count": n_words,
+                    "coverage_percent": coverage, "entities": st.session_state.entities,
+                    "lead": st.session_state.lead_cache, "full_text": txt, "segments": segs
+                }
+                st.download_button("🗂️ JSON completo", data=json.dumps(json_data, ensure_ascii=False, indent=2),
+                                   file_name=f"{fname_display}.json", mime="application/json", use_container_width=True)
+            with c5:
+                if st.session_state.analysis_cache or st.session_state.lead_cache:
+                    ae = {"filename": fname_display, "lead": st.session_state.lead_cache,
+                          "entities": st.session_state.entities, "analyses": st.session_state.analysis_cache}
+                    st.download_button("📊 Análisis (.json)", data=json.dumps(ae, ensure_ascii=False, indent=2),
+                                       file_name=f"{fname_display}_analisis.json", mime="application/json", use_container_width=True)
+                else:
+                    st.button("📊 Análisis (.json)", disabled=True, use_container_width=True)
+            if len(hist) > 1:
+                st.markdown("---")
+                se = {
+                    "session_date": datetime.now().isoformat(), "total_audios": len(hist),
+                    "audios": [{"filename": h.get("uploaded_filename"), "full_text": h.get("transcript_text", ""),
+                                "lead": h.get("lead_cache"), "entities": h.get("entities")} for h in hist]
+                }
+                st.download_button("📦 Sesión completa (.json)", data=json.dumps(se, ensure_ascii=False, indent=2),
+                                   file_name="sesion_completa.json", mime="application/json", use_container_width=True)
 
 
 if __name__ == "__main__":
