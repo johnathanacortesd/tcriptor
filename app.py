@@ -23,7 +23,7 @@ st.set_page_config(
 )
 
 # ============================================================
-# CSS — Estilo Claro + Naranja y Negro (Johnathan Cortés Ed.)
+# CSS — Tema Claro Premium + Naranja y Carbón
 # ============================================================
 st.markdown("""
 <style>
@@ -34,25 +34,22 @@ st.markdown("""
         --bg: #f8fafc;
         --surface: #ffffff;
         --surface-alt: #f1f5f9;
-        --surface-dark: #0f172a;
         --surface-border: #e2e8f0;
         --border-strong: #cbd5e1;
-        --text: #0f172a;
+        --text-primary: #0f172a;
         --text-secondary: #475569;
         --text-muted: #94a3b8;
         
-        /* Paleta Naranja + Negro */
+        /* Naranja + Carbón */
         --accent: #ea580c;
         --accent-bright: #f97316;
         --accent-dark: #c2410c;
         --accent-soft: rgba(249, 115, 22, 0.12);
         --accent-border: rgba(249, 115, 22, 0.35);
         
-        --black: #090d16;
+        --black: #0f172a;
         --amber: #d97706;
         --amber-soft: #fef3c7;
-        --emerald: #059669;
-        --emerald-soft: #ecfdf5;
         
         --radius: 12px;
         --radius-sm: 8px;
@@ -66,13 +63,13 @@ st.markdown("""
     .block-container { padding-top: 0.5rem !important; }
     [data-testid="stToolbar"] { display: none !important; }
     #MainMenu, footer, header { visibility: hidden; }
-    [data-testid="stAppViewContainer"] { background: var(--bg) !important; color: var(--text) !important; }
+    [data-testid="stAppViewContainer"] { background: var(--bg) !important; color: var(--text-primary) !important; }
 
     body, p, div, h1, h2, h3, h4, h5, h6, li, td, th,
     .stMarkdown, .stText, [data-testid="stMarkdownContainer"],
     .stButton > button, .stSelectbox, .stTextInput input, .stTextArea textarea {
         font-family: var(--sans) !important;
-        color: var(--text) !important;
+        color: var(--text-primary) !important;
     }
     code, pre, .mono, [data-testid="stCode"] {
         font-family: var(--mono) !important;
@@ -88,10 +85,10 @@ st.markdown("""
         background-color: var(--surface) !important;
         border: 1px solid var(--surface-border) !important;
         border-radius: var(--radius-sm) !important;
-        color: var(--text) !important;
+        color: var(--text-primary) !important;
         box-shadow: var(--shadow-sm) !important;
     }
-    .stTextInput input { font-size: 0.9rem !important; }
+    .stTextInput input { font-size: 0.9rem !important; color: var(--text-primary) !important; }
     .stTextInput > div > div:focus-within {
         border-color: var(--accent) !important;
         box-shadow: 0 0 0 3px var(--accent-soft) !important;
@@ -106,37 +103,39 @@ st.markdown("""
 
     /* ---------- LOGIN ---------- */
     .login-shell {
-        border: 2px solid var(--black); border-radius: var(--radius);
-        background: var(--surface); padding: 36px; box-shadow: var(--shadow-md);
+        border: 1px solid var(--surface-border); border-top: 4px solid var(--accent);
+        border-radius: var(--radius); background: var(--surface);
+        padding: 36px; box-shadow: var(--shadow-md);
     }
     .login-badge {
-        font-family: var(--mono); font-size: 0.75rem; color: var(--accent-bright);
+        font-family: var(--mono); font-size: 0.75rem; color: var(--accent);
         letter-spacing: 0.08em; font-weight: 700; text-transform: uppercase;
         margin-bottom: 8px;
     }
     .login-title { font-size: 1.5rem; font-weight: 700; color: var(--black); margin: 0 0 6px 0; }
     .login-subtitle { font-size: 0.88rem; color: var(--text-secondary); margin: 0 0 22px 0; }
 
-    /* ---------- HEADER BAR ---------- */
+    /* ---------- HEADER EN TEMA CLARO ---------- */
     .news-header {
         display: flex; align-items: center; justify-content: space-between;
-        background: var(--black); border-bottom: 3px solid var(--accent-bright);
+        background: var(--surface); border: 1px solid var(--surface-border);
+        border-top: 4px solid var(--accent-bright);
         border-radius: var(--radius) var(--radius) 0 0;
-        padding: 14px 22px; box-shadow: var(--shadow-md); color: #fff;
+        padding: 14px 22px; box-shadow: var(--shadow-sm);
     }
     .news-title-tag {
         display: inline-flex; align-items: center; gap: 12px;
-        font-family: var(--sans); font-weight: 700; font-size: 1.05rem; color: #ffffff;
+        font-family: var(--sans); font-weight: 700; font-size: 1.05rem; color: var(--text-primary);
     }
     .news-tag {
         font-family: var(--mono); font-size: 0.72rem; font-weight: 700;
-        color: var(--accent-bright); background: rgba(249, 115, 22, 0.18);
-        border: 1px solid var(--accent-bright); border-radius: 4px; padding: 3px 10px;
+        color: var(--accent-dark); background: var(--accent-soft);
+        border: 1px solid var(--accent-border); border-radius: 4px; padding: 3px 10px;
     }
     .creator-badge {
-        font-family: var(--sans); font-size: 0.82rem; font-weight: 600;
-        color: #f1f5f9; background: #1e293b; padding: 4px 12px; border-radius: 20px;
-        border: 1px solid #334155;
+        font-family: var(--sans); font-size: 0.82rem; font-weight: 700;
+        color: var(--black); background: var(--surface-alt); padding: 5px 14px; border-radius: 20px;
+        border: 1px solid var(--surface-border);
     }
 
     .news-body {
@@ -148,7 +147,7 @@ st.markdown("""
     /* ---------- SIDEBAR ---------- */
     section[data-testid="stSidebar"] { background: var(--surface) !important; border-right: 1px solid var(--surface-border) !important; }
     .side-comment {
-        font-family: var(--mono); font-size: 0.72rem; color: var(--accent-bright);
+        font-family: var(--mono); font-size: 0.72rem; color: var(--accent);
         text-transform: uppercase; margin: 18px 0 8px 0; letter-spacing: 0.06em; font-weight: 700;
     }
     .side-comment.first { margin-top: 4px; }
@@ -200,24 +199,23 @@ st.markdown("""
     }
     .code-line.active .line-time { background: var(--accent-bright); color: #fff; }
     .code-line .line-text {
-        font-family: var(--sans); font-size: 0.9rem; line-height: 1.55; color: var(--text);
+        font-family: var(--sans); font-size: 0.9rem; line-height: 1.55; color: var(--text-primary);
     }
 
-    /* ---------- LECTOR DE TRANSCRIPCIÓN COMPLETA (DERECHA) ---------- */
+    /* ---------- LECTOR DE TRANSCRIPCIÓN COMPLETA (DERECHA - TEXTO PURO) ---------- */
     .news-reader-card {
         border: 1px solid var(--surface-border); border-radius: var(--radius-sm);
         background: var(--surface); max-height: 560px; overflow-y: auto;
-        padding: 20px 24px; font-family: var(--sans); font-size: 0.98rem;
-        line-height: 1.85; color: var(--text);
+        padding: 24px 28px; font-family: var(--sans); font-size: 1.02rem;
+        line-height: 1.9; color: var(--text-primary);
         box-shadow: inset 0 2px 4px rgba(0,0,0,0.01);
     }
-    .full-seg-item {
-        padding: 6px 10px; border-radius: 6px; margin-bottom: 8px; transition: all 0.25s ease;
-        border-left: 3px solid transparent;
+    .full-text-span {
+        padding: 2px 4px; border-radius: 4px; transition: background 0.3s ease;
     }
-    .full-seg-item.active-full-seg {
+    .full-text-span.active-full-highlight {
         background: var(--accent-soft) !important;
-        border-left: 3px solid var(--accent-bright) !important;
+        border-bottom: 2px solid var(--accent-bright);
     }
 
     /* ---------- RESALTADOS ---------- */
@@ -244,7 +242,7 @@ st.markdown("""
         font-size: 0.92rem; color: var(--text-secondary); font-style: italic; margin-bottom: 16px;
     }
     .bullet-point {
-        display: flex; gap: 8px; margin-bottom: 8px; font-size: 0.92rem; color: var(--text);
+        display: flex; gap: 8px; margin-bottom: 8px; font-size: 0.92rem; color: var(--text-primary);
     }
     .bullet-icon { color: var(--accent-bright); font-weight: bold; }
 
@@ -278,55 +276,60 @@ st.markdown("""
         background: var(--accent-bright) !important; border: none !important; color: #fff !important;
     }
     .stButton > button[kind="primary"]:hover { background: var(--accent-dark) !important; }
-
-    .ts-jump-btn {
-        display: inline-flex; align-items: center; gap: 4px;
-        font-family: var(--mono); font-size: 0.72rem; font-weight: 700;
-        color: var(--accent-dark); background: var(--accent-soft);
-        border: 1px solid var(--accent-border); border-radius: 4px; padding: 3px 8px;
-        cursor: pointer; transition: all 0.15s ease; text-decoration: none;
-    }
-    .ts-jump-btn:hover { background: var(--accent-bright); color: #fff; }
 </style>
 """, unsafe_allow_html=True)
 
 
 # ============================================================
-# JAVASCRIPT: Salto de Audio + Auto-scroll en Transcripción
+# JAVASCRIPT: Auto-Scroll a la mención buscada (Ctrl+F behavior)
 # ============================================================
-def inject_audio_and_scroll_js():
+def inject_scroll_and_audio_js():
     components.html("""
     <script>
-    window.jumpToTimeAndScroll = function(seconds, idx) {
-        // 1. Jump audio
-        const audios = window.parent.document.querySelectorAll('audio');
-        if (audios.length > 0) {
-            const audio = audios[0];
-            audio.currentTime = seconds;
-            if (audio.paused) {
-                audio.play().catch(function(e) { console.log('Autoplay blocked:', e); });
+    window.jumpToSegmentAndScroll = function(seconds, idx) {
+        // 1. Jump audio player
+        if (seconds !== undefined && seconds !== null) {
+            const audios = window.parent.document.querySelectorAll('audio');
+            if (audios.length > 0) {
+                const audio = audios[0];
+                audio.currentTime = seconds;
+                if (audio.paused) {
+                    audio.play().catch(function(e) { console.log('Autoplay blocked:', e); });
+                }
             }
         }
-        // 2. Scroll full transcript right panel
+        // 2. Scroll clean text in right panel (news-reader-card)
         if (idx !== undefined && idx !== null) {
             const targetEl = window.parent.document.getElementById('full-seg-' + idx);
             if (targetEl) {
                 targetEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                const allSegs = window.parent.document.querySelectorAll('.full-seg-item');
-                allSegs.forEach(el => el.classList.remove('active-full-seg'));
-                targetEl.classList.add('active-full-seg');
+                const allSpans = window.parent.document.querySelectorAll('.full-text-span');
+                allSpans.forEach(el => el.classList.remove('active-full-highlight'));
+                targetEl.classList.add('active-full-highlight');
             }
         }
     };
 
+    window.autoScrollToFirstMatch = function(idx) {
+        setTimeout(function() {
+            const targetEl = window.parent.document.getElementById('full-seg-' + idx);
+            if (targetEl) {
+                targetEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                const allSpans = window.parent.document.querySelectorAll('.full-text-span');
+                allSpans.forEach(el => el.classList.remove('active-full-highlight'));
+                targetEl.classList.add('active-full-highlight');
+            }
+        }, 200);
+    };
+
     window.parent.document.addEventListener('click', function(e) {
-        const btn = e.target.closest('.ts-jump-btn, .code-line, .full-seg-item');
+        const btn = e.target.closest('.code-line, .full-text-span');
         if (btn) {
             const seconds = parseFloat(btn.getAttribute('data-time'));
             const idx = btn.getAttribute('data-idx');
-            if (!isNaN(seconds)) {
+            if (!isNaN(seconds) || idx !== null) {
                 e.preventDefault(); e.stopPropagation();
-                window.jumpToTimeAndScroll(seconds, idx);
+                window.jumpToSegmentAndScroll(seconds, idx);
             }
         }
     }, true);
@@ -334,14 +337,18 @@ def inject_audio_and_scroll_js():
     """, height=0)
 
 
-def make_ts_button_html(time_seconds, idx=0, label=None):
-    display = label or fmt_time(time_seconds)
-    return (f"<button class='ts-jump-btn' data-time='{time_seconds}' data-idx='{idx}' "
-            f"onclick='window.jumpToTimeAndScroll({time_seconds}, {idx})' title='Ir a {display}'>▶ {display}</button>")
+def trigger_autoscroll_script(idx):
+    components.html(f"""
+    <script>
+    if (window.parent.autoScrollToFirstMatch) {{
+        window.parent.autoScrollToFirstMatch({idx});
+    }}
+    </script>
+    """, height=0)
 
 
 # ============================================================
-# SESSION STATE & RESET
+# SESSION STATE
 # ============================================================
 DEFAULTS = {
     "authenticated": False,
@@ -725,7 +732,7 @@ def main_app():
             for k in list(st.session_state.keys()): del st.session_state[k]
             st.rerun()
 
-    # ── HEADER SUPERIOR ──
+    # ── HEADER SUPERIOR (TEMA CLARO CORREGIDO) ──
     fname_display = st.session_state.uploaded_filename or "Sin archivo"
     st.markdown(f"""
     <div class="news-header">
@@ -772,7 +779,7 @@ def main_app():
     with col_play:
         if st.session_state.audio_path:
             st.audio(st.session_state.audio_path, start_time=st.session_state.audio_start_time)
-        inject_audio_and_scroll_js()
+        inject_scroll_and_audio_js()
 
     with col_met:
         st.markdown(
@@ -793,13 +800,13 @@ def main_app():
     # ── DOS COLUMNAS DE TRABAJO ──
     left_col, right_col = st.columns([0.45, 0.55], gap="large")
 
-    # ── COLUMNA IZQUIERDA: BUSCADOR Y SEGMENTOS ──
+    # ── COLUMNA IZQUIERDA: BUSCADOR Y SEGMENTOS CON TIMESTAMPS ──
     with left_col:
         st.markdown("<div class='panel-header'><span>Buscador y Segmentación de Audio</span></div>", unsafe_allow_html=True)
         
         sb1, sb2 = st.columns([3, 1.2])
         with sb1:
-            query = st.text_input("Buscador de términos clave", placeholder="Escribe para buscar palabras clave...",
+            query = st.text_input("Buscador de términos clave", placeholder="Buscar palabras clave...",
                                   label_visibility="collapsed", value=st.session_state.search_query, key="search_box")
         with sb2:
             only_matches = st.toggle("Solo hallazgos", value=st.session_state.only_matches, key="toggle_only_matches")
@@ -811,8 +818,9 @@ def main_app():
         q_words = [w for w in norm(query).split() if w]
         left_lines_html = []
         
-        # Mapeo de fragmentos para el panel derecho
-        full_segments_rendered = []
+        # Mapeo de texto corrido (SIN TIMESTAMPS) para la derecha
+        full_text_spans = []
+        first_match_idx = None
 
         if query:
             pattern, mode = determine_search_mode(query, segs)
@@ -824,7 +832,10 @@ def main_app():
                 text_content = seg.get("text", "")
                 
                 matched, html_formatted = highlight_and_check(text_content, pattern, q_words, fuzzy_t, mode)
-                if matched: match_count += 1
+                if matched:
+                    match_count += 1
+                    if first_match_idx is None:
+                        first_match_idx = i
                 
                 if matched or not only_matches:
                     left_lines_html.append(
@@ -834,9 +845,10 @@ def main_app():
                         f"<span class='line-text'>{html_formatted if matched else text_content}</span></div>"
                     )
                 
-                full_segments_rendered.append(
-                    f"<div class='full-seg-item' id='full-seg-{i}' data-time='{start_sec}' data-idx='{i}'>"
-                    f"{make_ts_button_html(start_sec, idx=i)} {html_formatted if matched else text_content}</div>"
+                # Panel derecho: SOLO TEXTO PURO (Span con ID para salto tipo Ctrl+F)
+                full_text_spans.append(
+                    f"<span class='full-text-span' id='full-seg-{i}' data-time='{start_sec}' data-idx='{i}'>"
+                    f"{html_formatted if matched else text_content}</span> "
                 )
 
             if mode == "similar":
@@ -855,9 +867,11 @@ def main_app():
                     f"<span class='line-time'>{ts}</span>"
                     f"<span class='line-text'>{text_content}</span></div>"
                 )
-                full_segments_rendered.append(
-                    f"<div class='full-seg-item' id='full-seg-{i}' data-time='{start_sec}' data-idx='{i}'>"
-                    f"{make_ts_button_html(start_sec, idx=i)} {text_content}</div>"
+                
+                # Panel derecho: SOLO TEXTO PURO (Sin botones ni tiempos)
+                full_text_spans.append(
+                    f"<span class='full-text-span' id='full-seg-{i}' data-time='{start_sec}' data-idx='{i}'>"
+                    f"{text_content}</span> "
                 )
 
         if left_lines_html:
@@ -865,26 +879,30 @@ def main_app():
         else:
             st.info(f"Sin hallazgos para '{query}'")
 
+        # Auto-scroll en la transcripción completa a la primera mención
+        if first_match_idx is not None:
+            trigger_autoscroll_script(first_match_idx)
 
-    # ── COLUMNA DERECHA: PESTAÑAS Y TRANSCRIPCIÓN COMPLETA ──
+
+    # ── COLUMNA DERECHA: TRANSCRIPCIÓN COMPLETA (SOLO TEXTO) + PESTAÑAS ──
     with right_col:
         tab_text, tab_analysis, tab_entities, tab_qa = st.tabs([
-            "📰 Transcripción Completa",
+            "📰 Transcripción Completa (Texto Limpio)",
             "⚡ Análisis IA Periodístico",
             "🏷️ Entidades Extraídas",
             "💬 Asistente IA"
         ])
 
-        # TAB 1: TRANSCRIPCIÓN COMPLETA SINCRONIZADA
+        # TAB 1: TRANSCRIPCIÓN COMPLETA (100% TEXTO PURO)
         with tab_text:
             st.markdown(
                 f'<div class="news-reader-card">'
-                f'{"".join(full_segments_rendered)}'
+                f'{"".join(full_text_spans)}'
                 f'</div>', unsafe_allow_html=True
             )
             st.write("")
             st.download_button(
-                label="Descargar transcripción completa (.txt)",
+                label="Descargar noticia completa (.txt)",
                 data=txt,
                 file_name=f"{fname_display}_transcripcion.txt",
                 mime="text/plain",
