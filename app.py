@@ -737,7 +737,7 @@ def main_app():
     st.markdown(f"""
     <div class="news-header">
         <div class="news-title-tag">
-            <span>📰 MONITOR PERIODÍSTICO DE NOTICIAS</span>
+            <span>🎙Transcriptor Pro✍</span>
             <span class="news-tag">{fname_display}</span>
         </div>
         <div>
