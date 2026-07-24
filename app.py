@@ -17,13 +17,13 @@ from groq import Groq
 # ============================================================
 st.set_page_config(
     page_title="Monitor de Noticias — Transcriptor IA",
-    page_icon="📰",
+    page_icon="🟧",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
 # ============================================================
-# CSS — Estilo Claro Moderno (News Analytics Light Theme)
+# CSS — Estilo Claro + Naranja y Negro (Johnathan Cortés Ed.)
 # ============================================================
 st.markdown("""
 <style>
@@ -34,25 +34,30 @@ st.markdown("""
         --bg: #f8fafc;
         --surface: #ffffff;
         --surface-alt: #f1f5f9;
+        --surface-dark: #0f172a;
         --surface-border: #e2e8f0;
         --border-strong: #cbd5e1;
         --text: #0f172a;
         --text-secondary: #475569;
         --text-muted: #94a3b8;
-        --accent: #2563eb;
-        --accent-dark: #1d4ed8;
-        --accent-soft: #eff6ff;
-        --accent-border: #bfdbfe;
+        
+        /* Paleta Naranja + Negro */
+        --accent: #ea580c;
+        --accent-bright: #f97316;
+        --accent-dark: #c2410c;
+        --accent-soft: rgba(249, 115, 22, 0.12);
+        --accent-border: rgba(249, 115, 22, 0.35);
+        
+        --black: #090d16;
         --amber: #d97706;
         --amber-soft: #fef3c7;
         --emerald: #059669;
         --emerald-soft: #ecfdf5;
-        --red: #dc2626;
-        --red-soft: #fef2f2;
+        
         --radius: 12px;
         --radius-sm: 8px;
-        --shadow-sm: 0 1px 3px rgba(15, 23, 42, 0.06), 0 1px 2px rgba(15, 23, 42, 0.04);
-        --shadow-md: 0 4px 12px -2px rgba(15, 23, 42, 0.08);
+        --shadow-sm: 0 1px 3px rgba(15, 23, 42, 0.08);
+        --shadow-md: 0 4px 12px -2px rgba(15, 23, 42, 0.1);
         --mono: 'JetBrains Mono', monospace;
         --sans: 'IBM Plex Sans', -apple-system, sans-serif;
     }
@@ -75,7 +80,7 @@ st.markdown("""
 
     .main .block-container {
         padding: 0.8rem 1.8rem 1.5rem 1.8rem;
-        max-width: 1600px;
+        max-width: 1650px;
     }
 
     /* Inputs y Selectores */
@@ -86,7 +91,7 @@ st.markdown("""
         color: var(--text) !important;
         box-shadow: var(--shadow-sm) !important;
     }
-    .stTextInput input { font-size: 0.88rem !important; }
+    .stTextInput input { font-size: 0.9rem !important; }
     .stTextInput > div > div:focus-within {
         border-color: var(--accent) !important;
         box-shadow: 0 0 0 3px var(--accent-soft) !important;
@@ -96,204 +101,204 @@ st.markdown("""
     audio {
         border-radius: var(--radius-sm);
         width: 100%;
-        margin: 6px 0;
+        margin: 4px 0;
     }
 
     /* ---------- LOGIN ---------- */
     .login-shell {
-        border: 1px solid var(--surface-border); border-radius: var(--radius);
+        border: 2px solid var(--black); border-radius: var(--radius);
         background: var(--surface); padding: 36px; box-shadow: var(--shadow-md);
     }
     .login-badge {
-        font-family: var(--mono); font-size: 0.72rem; color: var(--accent);
+        font-family: var(--mono); font-size: 0.75rem; color: var(--accent-bright);
         letter-spacing: 0.08em; font-weight: 700; text-transform: uppercase;
         margin-bottom: 8px;
     }
-    .login-title { font-size: 1.4rem; font-weight: 700; color: var(--text); margin: 0 0 6px 0; }
-    .login-subtitle { font-size: 0.85rem; color: var(--text-secondary); margin: 0 0 22px 0; }
+    .login-title { font-size: 1.5rem; font-weight: 700; color: var(--black); margin: 0 0 6px 0; }
+    .login-subtitle { font-size: 0.88rem; color: var(--text-secondary); margin: 0 0 22px 0; }
 
-    /* ---------- HEADER BAR (ESTILO MONITOR) ---------- */
+    /* ---------- HEADER BAR ---------- */
     .news-header {
         display: flex; align-items: center; justify-content: space-between;
-        background: var(--surface); border: 1px solid var(--surface-border);
+        background: var(--black); border-bottom: 3px solid var(--accent-bright);
         border-radius: var(--radius) var(--radius) 0 0;
-        padding: 12px 20px; box-shadow: var(--shadow-sm);
+        padding: 14px 22px; box-shadow: var(--shadow-md); color: #fff;
     }
     .news-title-tag {
-        display: inline-flex; align-items: center; gap: 8px;
-        font-family: var(--sans); font-weight: 700; font-size: 0.92rem; color: var(--text);
+        display: inline-flex; align-items: center; gap: 12px;
+        font-family: var(--sans); font-weight: 700; font-size: 1.05rem; color: #ffffff;
     }
     .news-tag {
-        font-family: var(--mono); font-size: 0.68rem; font-weight: 600;
-        color: var(--accent); background: var(--accent-soft);
-        border: 1px solid var(--accent-border); border-radius: 4px; padding: 2px 8px;
+        font-family: var(--mono); font-size: 0.72rem; font-weight: 700;
+        color: var(--accent-bright); background: rgba(249, 115, 22, 0.18);
+        border: 1px solid var(--accent-bright); border-radius: 4px; padding: 3px 10px;
     }
+    .creator-badge {
+        font-family: var(--sans); font-size: 0.82rem; font-weight: 600;
+        color: #f1f5f9; background: #1e293b; padding: 4px 12px; border-radius: 20px;
+        border: 1px solid #334155;
+    }
+
     .news-body {
         border: 1px solid var(--surface-border); border-top: none;
         background: var(--surface); border-radius: 0 0 var(--radius) var(--radius);
-        padding: 20px; margin-bottom: 16px; box-shadow: var(--shadow-sm);
+        padding: 22px; margin-bottom: 16px; box-shadow: var(--shadow-sm);
     }
 
     /* ---------- SIDEBAR ---------- */
     section[data-testid="stSidebar"] { background: var(--surface) !important; border-right: 1px solid var(--surface-border) !important; }
     .side-comment {
-        font-family: var(--mono); font-size: 0.7rem; color: var(--accent);
+        font-family: var(--mono); font-size: 0.72rem; color: var(--accent-bright);
         text-transform: uppercase; margin: 18px 0 8px 0; letter-spacing: 0.06em; font-weight: 700;
     }
     .side-comment.first { margin-top: 4px; }
 
-    /* ---------- STATUS BAR / METRICS ---------- */
+    /* ---------- STATUS BAR ---------- */
     .status-bar {
-        display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 14px 0;
+        display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 14px 0;
     }
     .status-item {
-        font-family: var(--mono); font-size: 0.74rem; color: var(--text-secondary);
+        font-family: var(--mono); font-size: 0.75rem; color: var(--text-secondary);
         padding: 8px 12px; border: 1px solid var(--surface-border);
         background: var(--surface-alt); border-radius: var(--radius-sm); white-space: nowrap;
     }
-    .status-item strong { color: var(--text); font-weight: 700; }
-    .status-item.ok { background: var(--emerald-soft); color: var(--emerald); border-color: #a7f3d0; }
-    .status-item.warn { background: var(--amber-soft); color: var(--amber); border-color: #fde68a; }
+    .status-item strong { color: var(--black); font-weight: 700; }
+    .status-item.ok { background: var(--accent-soft); color: var(--accent-dark); border-color: var(--accent-border); }
 
-    /* ---------- COBERTURA ---------- */
-    .coverage-bar-container {
-        background: var(--surface-alt); border-radius: 6px; height: 14px;
-        overflow: hidden; border: 1px solid var(--surface-border); margin: 6px 0;
-    }
-    .coverage-bar-fill {
-        height: 100%; transition: width 0.5s ease;
-        display: flex; align-items: center; justify-content: center;
-        font-size: 0.65rem; font-weight: 700; color: #fff; font-family: var(--mono);
-    }
-    .coverage-ok { background: var(--emerald); }
-    .coverage-warn { background: var(--amber); }
-
-    /* ---------- HEADERS PERIODÍSTICOS ---------- */
+    /* ---------- HEADERS DE PANEL ---------- */
     .panel-header {
-        font-family: var(--sans); font-size: 0.82rem; font-weight: 700;
-        letter-spacing: 0.02em; color: var(--text-secondary); text-transform: uppercase;
-        margin-bottom: 10px; padding-bottom: 6px; border-bottom: 2px solid var(--surface-border);
+        font-family: var(--sans); font-size: 0.88rem; font-weight: 700;
+        letter-spacing: 0.02em; color: var(--black); text-transform: uppercase;
+        margin-bottom: 12px; padding-bottom: 6px; border-bottom: 2px solid var(--black);
         display: flex; justify-content: space-between; align-items: center;
     }
-    .panel-header .n { color: var(--accent); font-weight: 700; }
 
-    /* ---------- LISTA DE SEGMENTOS INTERACTIVOS ---------- */
+    /* ---------- LISTA DE SEGMENTOS INTERACTIVOS (IZQUIERDA) ---------- */
     .code-panel {
         border: 1px solid var(--surface-border); border-radius: var(--radius-sm);
-        background: var(--surface); max-height: 520px; overflow-y: auto;
+        background: var(--surface); max-height: 560px; overflow-y: auto;
     }
     .code-line {
         display: grid; grid-template-columns: 28px 62px 1fr;
         gap: 8px; align-items: baseline;
-        padding: 8px 12px; cursor: pointer;
+        padding: 9px 12px; cursor: pointer;
         border-left: 3px solid transparent;
         transition: all 0.12s ease;
         border-bottom: 1px solid var(--surface-alt);
     }
-    .code-line:hover { background: var(--surface-alt); }
+    .code-line:hover { background: var(--surface-alt); border-left-color: var(--accent-bright); }
     .code-line.active {
-        background: var(--accent-soft); border-left: 3px solid var(--accent);
+        background: var(--accent-soft); border-left: 4px solid var(--accent-bright);
     }
     .code-line .line-no {
         font-family: var(--mono); font-size: 0.7rem; color: var(--text-muted); text-align: right; user-select: none;
     }
     .code-line .line-time {
-        font-family: var(--mono); font-size: 0.7rem; color: var(--accent);
+        font-family: var(--mono); font-size: 0.7rem; color: var(--accent-dark);
         background: var(--accent-soft); border: 1px solid var(--accent-border);
-        border-radius: 4px; padding: 1px 6px; text-align: center; white-space: nowrap; font-weight: 600;
+        border-radius: 4px; padding: 2px 6px; text-align: center; white-space: nowrap; font-weight: 700;
     }
-    .code-line.active .line-time { background: var(--accent); color: #fff; }
+    .code-line.active .line-time { background: var(--accent-bright); color: #fff; }
     .code-line .line-text {
-        font-family: var(--sans); font-size: 0.88rem; line-height: 1.55; color: var(--text);
+        font-family: var(--sans); font-size: 0.9rem; line-height: 1.55; color: var(--text);
     }
 
-    /* ---------- LECTOR DE NOTICIA COMPLETA ---------- */
+    /* ---------- LECTOR DE TRANSCRIPCIÓN COMPLETA (DERECHA) ---------- */
     .news-reader-card {
         border: 1px solid var(--surface-border); border-radius: var(--radius-sm);
-        background: var(--surface); max-height: 580px; overflow-y: auto;
-        padding: 24px 28px; font-family: var(--sans); font-size: 0.98rem;
-        line-height: 1.85; color: var(--text); white-space: pre-wrap;
+        background: var(--surface); max-height: 560px; overflow-y: auto;
+        padding: 20px 24px; font-family: var(--sans); font-size: 0.98rem;
+        line-height: 1.85; color: var(--text);
         box-shadow: inset 0 2px 4px rgba(0,0,0,0.01);
     }
+    .full-seg-item {
+        padding: 6px 10px; border-radius: 6px; margin-bottom: 8px; transition: all 0.25s ease;
+        border-left: 3px solid transparent;
+    }
+    .full-seg-item.active-full-seg {
+        background: var(--accent-soft) !important;
+        border-left: 3px solid var(--accent-bright) !important;
+    }
 
-    /* ---------- RESALTADOS DE BÚSQUEDA ---------- */
+    /* ---------- RESALTADOS ---------- */
     mark.mk-exact {
-        background: #fef08a; color: #854d0e; padding: 2px 5px; border-radius: 4px;
-        font-weight: 600; border-bottom: 2px solid #ca8a04;
+        background: #ffedd5; color: #9a3412; padding: 2px 6px; border-radius: 4px;
+        font-weight: 700; border-bottom: 2px solid var(--accent-bright);
     }
     mark.mk-similar {
-        background: #fed7aa; color: #9a3412; padding: 2px 5px; border-radius: 4px;
-        font-weight: 600; border: 1px dashed #ea580c;
+        background: #fef3c7; color: #92400e; padding: 2px 6px; border-radius: 4px;
+        font-weight: 700; border: 1px dashed var(--amber);
     }
 
-    /* ---------- TARJETAS DE ANÁLISIS GROQ ---------- */
+    /* ---------- TARJETAS DE ANÁLISIS ---------- */
     .analysis-card {
         background: var(--surface); border: 1px solid var(--surface-border);
         border-radius: var(--radius); padding: 20px; margin-bottom: 16px;
         box-shadow: var(--shadow-sm);
     }
     .analysis-headline {
-        font-size: 1.25rem; font-weight: 700; color: var(--text); margin: 0 0 6px 0;
+        font-size: 1.3rem; font-weight: 700; color: var(--black); margin: 0 0 6px 0;
         line-height: 1.35;
     }
     .analysis-subheadline {
         font-size: 0.92rem; color: var(--text-secondary); font-style: italic; margin-bottom: 16px;
     }
     .bullet-point {
-        display: flex; gap: 8px; margin-bottom: 8px; font-size: 0.9rem; color: var(--text);
+        display: flex; gap: 8px; margin-bottom: 8px; font-size: 0.92rem; color: var(--text);
     }
-    .bullet-icon { color: var(--accent); font-weight: bold; }
+    .bullet-icon { color: var(--accent-bright); font-weight: bold; }
 
-    /* Entity Badges */
+    /* Badges de Entidades */
     .entity-tag {
-        display: inline-block; font-family: var(--sans); font-size: 0.78rem; font-weight: 600;
+        display: inline-block; font-family: var(--sans); font-size: 0.8rem; font-weight: 600;
         padding: 4px 10px; border-radius: 20px; margin: 3px 4px 3px 0;
     }
-    .entity-person { background: #e0e7ff; color: #3730a3; border: 1px solid #c7d2fe; }
-    .entity-org { background: #dcfce7; color: #166534; border: 1px solid #bbf7d0; }
-    .entity-loc { background: #fef3c7; color: #92400e; border: 1px solid #fde68a; }
+    .entity-person { background: #ffedd5; color: #9a3412; border: 1px solid #fed7aa; }
+    .entity-org { background: #f1f5f9; color: #0f172a; border: 1px solid #cbd5e1; }
+    .entity-loc { background: #fef3c7; color: #78350f; border: 1px solid #fde68a; }
     .entity-topic { background: #f3e8ff; color: #6b21a8; border: 1px solid #e9d5ff; }
 
     .soundbite-box {
-        background: var(--surface-alt); border-left: 4px solid var(--accent);
+        background: var(--surface-alt); border-left: 4px solid var(--accent-bright);
         padding: 12px 16px; border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-        font-style: italic; margin-bottom: 10px; font-size: 0.9rem; color: var(--text);
+        font-style: italic; margin-bottom: 10px; font-size: 0.92rem; color: var(--black);
     }
 
-    /* Buttons */
+    /* Botones Streamlit */
     .stButton > button {
         border-radius: var(--radius-sm) !important; font-weight: 600 !important;
-        font-size: 0.84rem !important; border-color: var(--surface-border) !important;
-        background-color: var(--surface) !important; color: var(--text) !important;
+        font-size: 0.85rem !important; border-color: var(--surface-border) !important;
+        background-color: var(--surface) !important; color: var(--black) !important;
         box-shadow: var(--shadow-sm) !important;
     }
     .stButton > button:hover {
-        border-color: var(--border-strong) !important; background-color: var(--surface-alt) !important;
+        border-color: var(--black) !important; background-color: var(--surface-alt) !important;
     }
     .stButton > button[kind="primary"] {
-        background: var(--accent) !important; border: none !important; color: #fff !important;
+        background: var(--accent-bright) !important; border: none !important; color: #fff !important;
     }
     .stButton > button[kind="primary"]:hover { background: var(--accent-dark) !important; }
 
     .ts-jump-btn {
         display: inline-flex; align-items: center; gap: 4px;
-        font-family: var(--mono); font-size: 0.7rem; font-weight: 600;
+        font-family: var(--mono); font-size: 0.72rem; font-weight: 700;
         color: var(--accent-dark); background: var(--accent-soft);
         border: 1px solid var(--accent-border); border-radius: 4px; padding: 3px 8px;
         cursor: pointer; transition: all 0.15s ease; text-decoration: none;
     }
-    .ts-jump-btn:hover { background: var(--accent); color: #fff; }
+    .ts-jump-btn:hover { background: var(--accent-bright); color: #fff; }
 </style>
 """, unsafe_allow_html=True)
 
 
 # ============================================================
-# JAVASCRIPT (Salto de audio)
+# JAVASCRIPT: Salto de Audio + Auto-scroll en Transcripción
 # ============================================================
-def inject_audio_js():
+def inject_audio_and_scroll_js():
     components.html("""
     <script>
-    window.jumpToTime = function(seconds) {
+    window.jumpToTimeAndScroll = function(seconds, idx) {
+        // 1. Jump audio
         const audios = window.parent.document.querySelectorAll('audio');
         if (audios.length > 0) {
             const audio = audios[0];
@@ -302,14 +307,26 @@ def inject_audio_js():
                 audio.play().catch(function(e) { console.log('Autoplay blocked:', e); });
             }
         }
+        // 2. Scroll full transcript right panel
+        if (idx !== undefined && idx !== null) {
+            const targetEl = window.parent.document.getElementById('full-seg-' + idx);
+            if (targetEl) {
+                targetEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                const allSegs = window.parent.document.querySelectorAll('.full-seg-item');
+                allSegs.forEach(el => el.classList.remove('active-full-seg'));
+                targetEl.classList.add('active-full-seg');
+            }
+        }
     };
+
     window.parent.document.addEventListener('click', function(e) {
-        const btn = e.target.closest('.ts-jump-btn, .code-line');
+        const btn = e.target.closest('.ts-jump-btn, .code-line, .full-seg-item');
         if (btn) {
             const seconds = parseFloat(btn.getAttribute('data-time'));
+            const idx = btn.getAttribute('data-idx');
             if (!isNaN(seconds)) {
                 e.preventDefault(); e.stopPropagation();
-                window.jumpToTime(seconds);
+                window.jumpToTimeAndScroll(seconds, idx);
             }
         }
     }, true);
@@ -317,14 +334,14 @@ def inject_audio_js():
     """, height=0)
 
 
-def make_ts_button_html(time_seconds, label=None):
+def make_ts_button_html(time_seconds, idx=0, label=None):
     display = label or fmt_time(time_seconds)
-    return (f"<button class='ts-jump-btn' data-time='{time_seconds}' "
-            f"onclick='window.jumpToTime({time_seconds})' title='Ir a {display}'>▶ {display}</button>")
+    return (f"<button class='ts-jump-btn' data-time='{time_seconds}' data-idx='{idx}' "
+            f"onclick='window.jumpToTimeAndScroll({time_seconds}, {idx})' title='Ir a {display}'>▶ {display}</button>")
 
 
 # ============================================================
-# SESSION STATE
+# SESSION STATE & RESET
 # ============================================================
 DEFAULTS = {
     "authenticated": False,
@@ -354,7 +371,6 @@ for k, v in DEFAULTS.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
-
 def reset_transcript_state():
     keep = {"authenticated", "pydub_available"}
     for k, v in DEFAULTS.items():
@@ -363,7 +379,7 @@ def reset_transcript_state():
 
 
 # ============================================================
-# PYDUB / FFMPEG & UTILIDADES
+# PYDUB & UTILIDADES
 # ============================================================
 def check_pydub_ffmpeg():
     if st.session_state.pydub_available is not None:
@@ -405,7 +421,7 @@ def norm(text):
 
 
 # ============================================================
-# AUTHENTICATION
+# AUTENTICACIÓN
 # ============================================================
 def check_password():
     if st.session_state.authenticated: return True
@@ -422,8 +438,8 @@ def check_password():
     with col2:
         st.markdown(
             '<div class="login-shell">'
-            '<div class="login-badge">SISTEMA PERIODÍSTICO</div>'
-            '<p class="login-title">Monitor de Noticias IA</p>'
+            '<div class="login-badge">MONITOR PERIODÍSTICO</div>'
+            '<p class="login-title">Plataforma de Noticias IA</p>'
             '<p class="login-subtitle">Ingresa la clave de acceso para continuar</p>'
             '</div>', unsafe_allow_html=True)
         st.write("")
@@ -437,17 +453,13 @@ def check_password():
 
 def get_client():
     try: return Groq(api_key=st.secrets["general"]["groq_api_key"])
-    except: st.error("API Key de Groq no configurada"); return None
+    except: st.error("API Key no configurada"); return None
 
 
 # ============================================================
-# FUNCIONES DE ANÁLISIS PERIODÍSTICO CON GROQ (LLM)
+# ANÁLISIS PERIODÍSTICO (GROQ LLM)
 # ============================================================
 def analyze_news_with_groq(client, full_text):
-    """
-    Analiza la transcripción usando Llama 3.3 70B de Groq
-    y devuelve un objeto JSON estructurado con métricas periodísticas.
-    """
     system_prompt = """
     Eres un editor periodístico senior especializado en análisis de noticias y boletines informativos en español.
     Analiza la transcripción provista y genera una respuesta únicamente en formato JSON estricto con la siguiente estructura:
@@ -471,7 +483,7 @@ def analyze_news_with_groq(client, full_text):
         "temas_clave": ["Tema o concepto clave 1", "Tema 2"]
       }
     }
-    No incluyas introducciones ni código Markdown fuera del JSON.
+    No incluyas código Markdown fuera del JSON.
     """
     try:
         r = client.chat.completions.create(
@@ -484,24 +496,21 @@ def analyze_news_with_groq(client, full_text):
             response_format={"type": "json_object"}
         )
         return json.loads(r.choices[0].message.content)
-    except Exception as e:
+    except:
         return None
 
 def ask_news_assistant(client, full_text, query):
-    """
-    Responde preguntas sobre la noticia usando RAG/In-context prompt con Groq.
-    """
     system_prompt = """
     Eres un asistente periodístico de precisión. Tienes acceso a la transcripción exacta de un reporte o noticia.
     Responde la pregunta del usuario basándote EXCLUSIVAMENTE en la información mencionada en la transcripción.
-    Sé conciso, citando hechos o frases del reporte cuando corresponda. Si la pregunta no se responde en el texto, indícalo claramente.
+    Sé conciso y directo.
     """
     try:
         r = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"TRANSCRIPCIÓN:\n{full_text}\n\nPREGUNTA DEL USUARIO: {query}"}
+                {"role": "user", "content": f"TRANSCRIPCIÓN:\n{full_text}\n\nPREGUNTA: {query}"}
             ],
             temperature=0.2
         )
@@ -511,7 +520,7 @@ def ask_news_assistant(client, full_text, query):
 
 
 # ============================================================
-# TRANSCRIPCIÓN Y PROCESAMIENTO DE AUDIO
+# TRANSCRIPCIÓN Y AUDIO
 # ============================================================
 def save_uploaded(f):
     try:
@@ -528,7 +537,7 @@ def convert_to_mp3(input_path, status_writer=None):
             if os.path.isfile(c): ffmpeg_bin = c; break
     if not ffmpeg_bin: return input_path, False
     out_path = input_path.rsplit(".", 1)[0] + "_norm.mp3"
-    if status_writer: status_writer.write("Normalizando audio para emisión radiofónica/noticias...")
+    if status_writer: status_writer.write("Normalizando calidad de audio de noticias...")
     cmd = [ffmpeg_bin, "-y", "-i", input_path, "-vn", "-acodec", "libmp3lame",
            "-ac", "1", "-ar", "16000", "-b:a", "128k",
            "-af", "highpass=f=80,lowpass=f=8000,afftdn=nr=10,dynaudnorm,aresample=16000",
@@ -553,7 +562,6 @@ def transcribe_single(client, path, model, prompt=None):
         kwargs = {"file": (os.path.basename(path), file_data), "model": model,
                   "response_format": "verbose_json", "language": "es", "temperature": 0.0}
         
-        # Prompt enriquecido por defecto para noticias en español
         news_context = "Noticias, prensa, boletín informativo, radio, televisión, declaraciones, vocero, fiscalía, ministerio, reporte periodístico."
         kwargs["prompt"] = f"{news_context} {prompt}" if prompt else news_context
         
@@ -570,16 +578,13 @@ def transcribe_single(client, path, model, prompt=None):
         return None, None, str(e)
 
 def correct_spanish_news_style(client, raw_text, segments, custom_vocab=""):
-    """
-    Corrige ortografía y estilo específico de periodismo en español usando Groq.
-    """
     system_prompt = f"""
     Eres un corrector de estilo periodístico experto en español (agencias EFE / AP).
     Tu tarea es corregir la transcripción de una noticia:
     1. Asegurar la ortografía exacta, mayúsculas en instituciones/nombres y acentuación.
     2. Formatear adecuadamente números, porcentajes y divisas (ej: "5 millones de dólares", "12%").
     3. Respetar estrictamente el vocabulario clave provisto: {custom_vocab}
-    4. NO agregues explicaciones ni alteres el sentido del mensaje. Devuelve únicamente el texto corregido.
+    4. NO agregues explicaciones. Devuelve únicamente el texto corregido.
     """
     try:
         r = client.chat.completions.create(
@@ -609,7 +614,7 @@ def realign_segments(corrected_text, original_segments):
 
 
 # ============================================================
-# BÚSQUEDA Y MATCHING DE TÉRMINOS
+# BÚSQUEDA Y MATCHING (EXACTO Y SIMILAR)
 # ============================================================
 _ACCENT_MAP = {'a': '[aáàâä]', 'e': '[eéèêë]', 'i': '[iíìîï]', 'o': '[oóòôö]', 'u': '[uúùûü]', 'n': '[nñ]'}
 
@@ -652,11 +657,11 @@ def highlight_and_check(text, pattern, q_words, fuzzy_thresh, mode):
 
 
 # ============================================================
-# PROCESO PRINCIPAL DE CONTROL
+# PROCESO PRINCIPAL
 # ============================================================
 def process_audio(client, uploaded, model, do_correct, custom_vocab=""):
     reset_transcript_state()
-    with st.status("Procesando noticia con Groq...", expanded=True) as status:
+    with st.status("Procesando audio de noticia...", expanded=True) as status:
         path = save_uploaded(uploaded)
         if not path: st.error("Error al guardar archivo"); return False
         st.session_state.uploaded_filename = uploaded.name
@@ -665,19 +670,18 @@ def process_audio(client, uploaded, model, do_correct, custom_vocab=""):
         converted_path, _ = convert_to_mp3(path, status_writer=status)
         st.session_state.audio_path = path
         
-        status.write("Transcribiendo noticia con Whisper en Groq...")
+        status.write("Transcribiendo noticia...")
         full_text, segments, err = transcribe_single(client, converted_path, model, prompt=custom_vocab)
-        if err or not full_text: st.error("Error en la transcripción"); return False
+        if err or not full_text: st.error("Error en transcripción"); return False
         
         dur_ms, _ = get_audio_info(converted_path)
-        duration_sec = (dur_ms or 0) / 1000.0
         
         if do_correct:
-            status.write("Perfeccionando estilo periodístico con Llama 3.3...")
+            status.write("Aplicando corrección de estilo periodístico...")
             full_text, segments = correct_spanish_news_style(client, full_text, segments, custom_vocab)
             st.session_state.correction_applied = True
             
-        status.write("Generando análisis periodístico automático...")
+        status.write("Generando análisis periodístico inteligente...")
         news_analysis = analyze_news_with_groq(client, full_text)
         
         st.session_state.transcript_text = full_text
@@ -685,12 +689,12 @@ def process_audio(client, uploaded, model, do_correct, custom_vocab=""):
         st.session_state.audio_duration_ms = dur_ms or 0
         st.session_state.news_analysis = news_analysis
         
-        status.update(label="Análisis y transcripción completados con éxito", state="complete", expanded=False)
+        status.update(label="Noticia procesada y analizada correctamente", state="complete", expanded=False)
     return True
 
 
 # ============================================================
-# INTERFAZ DE USUARIO PRINCIPAL
+# APP PRINCIPAL
 # ============================================================
 def main_app():
     client = get_client()
@@ -700,28 +704,28 @@ def main_app():
     # ── SIDEBAR ──
     with st.sidebar:
         st.markdown("<div class='side-comment first'>CONFIGURACIÓN PERIODÍSTICA</div>", unsafe_allow_html=True)
-        model = st.selectbox("Modelo Whisper (Groq)", ["whisper-large-v3", "whisper-large-v3-turbo"],
-                             format_func=lambda x: "Large V3 (Máxima precisión)" if "turbo" not in x else "Large V3 Turbo (Alta velocidad)")
+        model = st.selectbox("Modelo Whisper", ["whisper-large-v3", "whisper-large-v3-turbo"],
+                             format_func=lambda x: "Large V3 (Máxima precisión)" if "turbo" not in x else "Large V3 Turbo (Rápido)")
         do_correct = st.toggle("Corrección periodística IA", value=True)
 
         st.markdown("<div class='side-comment'>VOCABULARIO CLAVE / NOMBRES</div>", unsafe_allow_html=True)
-        st.caption("Añade nombres de funcionarios, candidatos o instituciones para garantizar precisión 100%.")
+        st.caption("Escribe nombres propios, candidatos o instituciones para garantizar precisión 100%.")
         custom_vocab = st.text_area("Vocabulario", value=st.session_state.get("custom_vocabulary", ""),
-            placeholder="Ministerio de Economía\nPetro\nComfenalco\nEcopetrol", height=100, label_visibility="collapsed")
+            placeholder="Ministerio de Economía\nComfenalco\nEcopetrol", height=100, label_visibility="collapsed")
 
         st.markdown("<div class='side-comment'>AJUSTES DE BÚSQUEDA</div>", unsafe_allow_html=True)
-        fuzzy_t = st.slider("Tolerancia fonética/typos", 0.55, 0.95, 0.72, 0.02)
+        fuzzy_t = st.slider("Tolerancia a variaciones/typos", 0.55, 0.95, 0.72, 0.02)
 
         st.markdown("---")
         if st.session_state.transcript_text:
-            if st.button("Subir nueva noticia", use_container_width=True):
+            if st.button("➕ Subir otro audio", use_container_width=True, type="primary"):
                 reset_transcript_state()
                 st.rerun()
         if st.button("Cerrar sesión", use_container_width=True):
             for k in list(st.session_state.keys()): del st.session_state[k]
             st.rerun()
 
-    # ── HEADER ──
+    # ── HEADER SUPERIOR ──
     fname_display = st.session_state.uploaded_filename or "Sin archivo"
     st.markdown(f"""
     <div class="news-header">
@@ -730,25 +734,25 @@ def main_app():
             <span class="news-tag">{fname_display}</span>
         </div>
         <div>
-            <span style="font-family:var(--mono);font-size:0.75rem;color:var(--text-muted)">Groq LLM + Whisper Powered</span>
+            <span class="creator-badge">Creado por Johnathan Cortés</span>
         </div>
     </div>""", unsafe_allow_html=True)
 
     st.markdown('<div class="news-body">', unsafe_allow_html=True)
 
-    # ── CARGA DE AUDIO ──
+    # ── CARGA DE AUDIO NUEVO ──
     if not st.session_state.transcript_text:
-        _, col_c, _ = st.columns([1, 2, 1])
+        _, col_c, _ = st.columns([1, 2.2, 1])
         with col_c:
             st.markdown(
-                '<div style="text-align:center;padding:40px 20px;border:2px dashed var(--border-strong);border-radius:var(--radius);background:var(--surface);">'
-                '<div style="font-size:2.5rem;margin-bottom:10px;">🎙️</div>'
-                '<div style="font-weight:700;font-size:1.1rem;margin-bottom:4px;">Carga un boletín o reporte de noticias</div>'
-                '<div style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:20px;">Soporta archivos MP3, WAV, M4A o extractos de radio/TV</div>'
+                '<div style="text-align:center;padding:44px 24px;border:2px dashed var(--border-strong);border-radius:var(--radius);background:var(--surface);">'
+                '<div style="font-size:2.8rem;margin-bottom:12px;">🎙️</div>'
+                '<div style="font-weight:700;font-size:1.2rem;margin-bottom:6px;color:var(--black);">Subir Noticia o Reporte de Audio</div>'
+                '<div style="font-size:0.88rem;color:var(--text-secondary);margin-bottom:24px;">Selecciona tu archivo de audio (MP3, WAV, M4A, OGG) para procesarlo.</div>'
                 '</div>', unsafe_allow_html=True)
             st.write("")
             uploaded = st.file_uploader("Subir audio", type=["mp3","wav","m4a","ogg","mp4"], label_visibility="collapsed")
-            if uploaded and st.button("Transcribir y Analizar Noticia", type="primary", use_container_width=True):
+            if uploaded and st.button("▶ Transcribir y Analizar Noticia", type="primary", use_container_width=True):
                 if process_audio(client, uploaded, model, do_correct, custom_vocab=custom_vocab): st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
         return
@@ -763,109 +767,131 @@ def main_app():
     wpm = round(n_words / max(duration/60, 1)) if duration > 0 else 0
     analysis = st.session_state.news_analysis
 
-    # ── PANEL SUPERIOR: REPRODUCTOR Y MÉTRICAS ──
-    col_play, col_met = st.columns([0.45, 0.55])
+    # ── BARRA PRINCIPAL Y BOTÓN DE NUEVO AUDIO ──
+    col_play, col_met, col_new = st.columns([0.4, 0.42, 0.18])
     with col_play:
         if st.session_state.audio_path:
             st.audio(st.session_state.audio_path, start_time=st.session_state.audio_start_time)
-        inject_audio_js()
+        inject_audio_and_scroll_js()
 
     with col_met:
         st.markdown(
             '<div class="status-bar">'
             f'<span class="status-item">Duración: <strong>{fmt_duration(duration)}</strong></span>'
             f'<span class="status-item">Palabras: <strong>{n_words:,}</strong></span>'
-            f'<span class="status-item">Velocidad: <strong>{wpm} ppm</strong></span>'
-            f'<span class="status-item ok">Estilo: <strong>Periodístico EFE</strong></span>'
+            f'<span class="status-item ok">Prensa EFE/AP</span>'
             '</div>', unsafe_allow_html=True
         )
 
+    with col_new:
+        if st.button("➕ Subir otro audio", use_container_width=True, type="primary"):
+            reset_transcript_state()
+            st.rerun()
+
     st.write("")
 
-    # ── CONTENIDO EN 2 COLUMNAS ──
+    # ── DOS COLUMNAS DE TRABAJO ──
     left_col, right_col = st.columns([0.45, 0.55], gap="large")
 
-    # ── COLUMNA IZQUIERDA: SEGMENTOS INTERACTIVOS Y BUSCADOR ──
+    # ── COLUMNA IZQUIERDA: BUSCADOR Y SEGMENTOS ──
     with left_col:
-        st.markdown("<div class='panel-header'>Búsqueda y Segmentación de Audio</div>", unsafe_allow_html=True)
+        st.markdown("<div class='panel-header'><span>Buscador y Segmentación de Audio</span></div>", unsafe_allow_html=True)
         
         sb1, sb2 = st.columns([3, 1.2])
         with sb1:
-            query = st.text_input("Buscador de términos clave", placeholder="Buscar nombres, lugares o palabras clave...",
+            query = st.text_input("Buscador de términos clave", placeholder="Escribe para buscar palabras clave...",
                                   label_visibility="collapsed", value=st.session_state.search_query, key="search_box")
         with sb2:
-            only_matches = st.toggle("Filtrar", value=st.session_state.only_matches, key="toggle_only_matches")
+            only_matches = st.toggle("Solo hallazgos", value=st.session_state.only_matches, key="toggle_only_matches")
 
         if query != st.session_state.search_query:
             st.session_state.search_query = query
             st.session_state.active_segment_idx = -1
 
         q_words = [w for w in norm(query).split() if w]
-        lines_html = []
-        highlighted_full_text = txt
+        left_lines_html = []
+        
+        # Mapeo de fragmentos para el panel derecho
+        full_segments_rendered = []
 
         if query:
             pattern, mode = determine_search_mode(query, segs)
             match_count = 0
-            
-            if mode == "exacta" and pattern:
-                highlighted_full_text = pattern.sub(lambda m: f"<mark class='mk-exact'>{m.group()}</mark>", txt)
-            elif mode == "similar":
-                _, highlighted_full_text = _fuzzy_highlight(txt, q_words, fuzzy_t)
 
             for i, seg in enumerate(segs):
+                start_sec = float(seg.get("start", 0))
+                ts = fmt_time(start_sec)
                 text_content = seg.get("text", "")
-                matched, html = highlight_and_check(text_content, pattern, q_words, fuzzy_t, mode)
+                
+                matched, html_formatted = highlight_and_check(text_content, pattern, q_words, fuzzy_t, mode)
                 if matched: match_count += 1
+                
                 if matched or not only_matches:
-                    start_sec = float(seg.get("start", 0))
-                    ts = fmt_time(start_sec)
-                    lines_html.append(
-                        f"<div class='code-line' data-time='{start_sec}'>"
+                    left_lines_html.append(
+                        f"<div class='code-line' data-time='{start_sec}' data-idx='{i}'>"
                         f"<span class='line-no'>{i+1}</span>"
                         f"<span class='line-time'>{ts}</span>"
-                        f"<span class='line-text'>{html if matched else text_content}</span></div>"
+                        f"<span class='line-text'>{html_formatted if matched else text_content}</span></div>"
                     )
+                
+                full_segments_rendered.append(
+                    f"<div class='full-seg-item' id='full-seg-{i}' data-time='{start_sec}' data-idx='{i}'>"
+                    f"{make_ts_button_html(start_sec, idx=i)} {html_formatted if matched else text_content}</div>"
+                )
 
             if mode == "similar":
-                st.caption(f"🔍 Coincidencias similares para: **{query}**")
+                st.caption(f"🔍 Mostrando variaciones/términos similares para: **{query}** ({match_count} hallazgos)")
+            else:
+                st.caption(f"🎯 Busqueda exacta para: **{query}** ({match_count} hallazgos)")
         else:
             for i, seg in enumerate(segs):
                 start_sec = float(seg.get("start", 0))
                 ts = fmt_time(start_sec)
-                lines_html.append(
-                    f"<div class='code-line' data-time='{start_sec}'>"
+                text_content = seg.get("text", "")
+                
+                left_lines_html.append(
+                    f"<div class='code-line' data-time='{start_sec}' data-idx='{i}'>"
                     f"<span class='line-no'>{i+1}</span>"
                     f"<span class='line-time'>{ts}</span>"
-                    f"<span class='line-text'>{seg.get('text', '')}</span></div>"
+                    f"<span class='line-text'>{text_content}</span></div>"
+                )
+                full_segments_rendered.append(
+                    f"<div class='full-seg-item' id='full-seg-{i}' data-time='{start_sec}' data-idx='{i}'>"
+                    f"{make_ts_button_html(start_sec, idx=i)} {text_content}</div>"
                 )
 
-        if lines_html:
-            st.markdown(f"<div class='code-panel'>{''.join(lines_html)}</div>", unsafe_allow_html=True)
+        if left_lines_html:
+            st.markdown(f"<div class='code-panel'>{''.join(left_lines_html)}</div>", unsafe_allow_html=True)
+        else:
+            st.info(f"Sin hallazgos para '{query}'")
 
 
-    # ── COLUMNA DERECHA: PESTAÑAS DE ANÁLISIS E INFORMACIÓN ──
+    # ── COLUMNA DERECHA: PESTAÑAS Y TRANSCRIPCIÓN COMPLETA ──
     with right_col:
         tab_text, tab_analysis, tab_entities, tab_qa = st.tabs([
-            "📰 Transcripción",
-            "⚡ Análisis IA (Groq)",
-            "🏷️ Entidades Mencionadas",
-            "💬 Asistente IA de Consulta"
+            "📰 Transcripción Completa",
+            "⚡ Análisis IA Periodístico",
+            "🏷️ Entidades Extraídas",
+            "💬 Asistente IA"
         ])
 
-        # TAB 1: TEXTO COMPLETO
+        # TAB 1: TRANSCRIPCIÓN COMPLETA SINCRONIZADA
         with tab_text:
-            st.markdown(f'<div class="news-reader-card">{highlighted_full_text}</div>', unsafe_allow_html=True)
+            st.markdown(
+                f'<div class="news-reader-card">'
+                f'{"".join(full_segments_rendered)}'
+                f'</div>', unsafe_allow_html=True
+            )
             st.write("")
             st.download_button(
-                label="Descargar noticia en texto (.txt)",
+                label="Descargar transcripción completa (.txt)",
                 data=txt,
-                file_name=f"{fname_display}_noticia.txt",
+                file_name=f"{fname_display}_transcripcion.txt",
                 mime="text/plain",
                 use_container_width=True
             )
 
-        # TAB 2: ANÁLISIS PERIODÍSTICO AUTOMÁTICO
+        # TAB 2: ANÁLISIS AUTOMÁTICO
         with tab_analysis:
             if analysis:
                 st.markdown('<div class="analysis-card">', unsafe_allow_html=True)
@@ -877,15 +903,15 @@ def main_app():
                     st.markdown(f'<div class="bullet-point"><span class="bullet-icon">•</span><span>{bp}</span></div>', unsafe_allow_html=True)
                 
                 st.write("")
-                st.markdown(f"**Tono Editorial Detectado:** `{analysis.get('tono_editorial', 'Informativo')}`")
+                st.markdown(f"**Tono Editorial:** `{analysis.get('tono_editorial', 'Informativo')}`")
                 st.markdown('</div>', unsafe_allow_html=True)
 
                 if analysis.get("citas_destacadas"):
-                    st.markdown("**💬 Citas / Declaraciones Textuales Relevantes:**")
+                    st.markdown("**💬 Declaraciones Textuales Relevantes:**")
                     for cita in analysis.get("citas_destacadas", []):
                         st.markdown(f'<div class="soundbite-box">"{cita}"</div>', unsafe_allow_html=True)
             else:
-                st.info("No se generó el análisis automático para esta noticia.")
+                st.info("No se pudo generar el análisis automático para esta noticia.")
 
         # TAB 3: ENTIDADES EXTRAÍDAS
         with tab_entities:
@@ -908,22 +934,20 @@ def main_app():
                     st.markdown("**📍 Lugares / Ubicaciones:**")
                     if ents.get("lugares"):
                         for l in ents["lugares"]: st.markdown(f'<span class="entity-tag entity-loc">{l}</span>', unsafe_allow_html=True)
-                    else: st.caption("Ningunos detectados")
+                    else: st.caption("Ninguno detectado")
 
                     st.markdown("<br>**🏷️ Temas Clave:**", unsafe_allow_html=True)
                     if ents.get("temas_clave"):
                         for t in ents["temas_clave"]: st.markdown(f'<span class="entity-tag entity-topic">{t}</span>', unsafe_allow_html=True)
                     else: st.caption("Ninguno detectado")
-            else:
-                st.info("Sin entidades detectadas.")
 
-        # TAB 4: ASISTENTE DE CONSULTA SOBRE LA NOTICIA
+        # TAB 4: ASISTENTE IA DE CONSULTA
         with tab_qa:
-            st.caption("Realiza preguntas directamente a la transcripción de la noticia (Ej: ¿Qué dijo el vocero sobre el presupuesto?)")
-            user_q = st.text_input("Tu pregunta sobre el audio:", placeholder="Ej: ¿Qué cifras se mencionan sobre las pérdidas?")
+            st.caption("Consulta cualquier duda sobre el reporte de noticias:")
+            user_q = st.text_input("Tu pregunta sobre la noticia:", placeholder="Ej: ¿Qué se dijo sobre la reforma o las cifras?")
             
             if st.button("Consultar con IA", type="primary") and user_q:
-                with st.spinner("Analizando respuesta en el texto..."):
+                with st.spinner("Buscando en la transcripción..."):
                     answer = ask_news_assistant(client, txt, user_q)
                     st.markdown(f"**Respuesta:**\n\n{answer}")
 
