@@ -3,22 +3,27 @@ import streamlit.components.v1 as components
 import os
 import tempfile
 import unicodedata
-from groq import Groq
-from difflib import SequenceMatcher
+import shutil
+import subprocess
 import re
-import json
 import time
 from datetime import datetime
+from difflib import SequenceMatcher
+from groq import Groq
 
-# --- CONFIGURACIÓN ---
+# ============================================================
+# CONFIGURACIÓN DE PÁGINA
+# ============================================================
 st.set_page_config(
     page_title="Transcriptor Pro",
     page_icon="🎙️",
     layout="wide",
-    initial_sidebar_state="expanded" # Expandido por defecto para que sea visible el sidebar de inmediato
+    initial_sidebar_state="expanded"
 )
 
-# --- CSS ---
+# ============================================================
+# CSS
+# ============================================================
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght=300;400;500;600;700&display=swap');
@@ -43,14 +48,11 @@ st.markdown("""
         --red-bg: #fef2f2;
         --blue: #2563eb;
         --blue-bg: #eff6ff;
-        --purple: #7c3aed;
-        --purple-bg: #f5f3ff;
         --radius: 12px;
         --radius-sm: 8px;
         --radius-xs: 6px;
         --shadow-xs: 0 1px 2px rgba(0,0,0,0.04);
         --shadow-sm: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
-        --shadow-md: 0 4px 6px -1px rgba(0,0,0,0.06), 0 2px 4px -2px rgba(0,0,0,0.04);
         --transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
     }
 
@@ -94,7 +96,7 @@ st.markdown("""
 
     .app-bar {
         display: flex; align-items: center; justify-content: space-between;
-        padding: 6px 0 4px 0; margin-bottom: 4px;
+        padding: 6px 0 4px 0; margin-bottom: 6px;
         border-bottom: 1px solid var(--border);
     }
     .app-bar-left { display: flex; align-items: center; gap: 10px; }
@@ -108,27 +110,6 @@ st.markdown("""
     .app-tag {
         font-size: 0.58rem; background: var(--primary-light); color: var(--primary);
         padding: 2px 7px; border-radius: 20px; font-weight: 600; text-transform: uppercase;
-    }
-
-    .hist-bar {
-        display: flex; gap: 4px; flex-wrap: wrap;
-        padding: 4px 0 6px 0; margin-bottom: 4px;
-        border-bottom: 1px solid var(--border);
-    }
-    .hist-chip {
-        display: inline-flex; align-items: center; gap: 5px;
-        font-size: 0.72rem; padding: 4px 10px;
-        border-radius: 20px; border: 1px solid var(--border);
-        background: var(--bg); color: var(--text-secondary);
-        cursor: pointer; font-weight: 500; white-space: nowrap;
-        transition: var(--transition);
-    }
-    .hist-chip.active {
-        background: var(--primary); color: white; border-color: var(--primary);
-    }
-    .hist-chip-dot {
-        width: 6px; height: 6px; border-radius: 50%;
-        background: currentColor; opacity: 0.6;
     }
 
     .stats-bar { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 6px 0; }
@@ -148,7 +129,6 @@ st.markdown("""
         margin-bottom: 5px; box-shadow: var(--shadow-xs); transition: var(--transition);
     }
     .sr-card:hover { border-color: var(--primary-subtle); box-shadow: var(--shadow-sm); }
-    .sr-card-global { border-left: 3px solid var(--blue); }
     .sr-head { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
     .sr-time {
         font-family: 'JetBrains Mono', monospace !important;
@@ -159,104 +139,25 @@ st.markdown("""
         font-size: 0.58rem; font-weight: 700; padding: 1px 6px;
         border-radius: 4px; text-transform: uppercase;
     }
-    .sr-badge-high { background: var(--green-bg); color: var(--green); }
-    .sr-badge-medium { background: var(--amber-bg); color: var(--amber); }
-    .sr-badge-low { background: var(--red-bg); color: var(--red); }
-    .sr-body { font-size: 0.81rem; line-height: 1.6; color: var(--text); }
-    .sr-ctx { color: var(--text-muted); }
-    .sr-segment-full {
-        font-size: 0.76rem; line-height: 1.5; color: var(--text-secondary);
-        margin-top: 5px; padding-top: 5px; border-top: 1px dashed var(--border);
-    }
+    .sr-badge-exacta { background: var(--green-bg); color: var(--green); }
+    .sr-badge-similar { background: var(--amber-bg); color: var(--amber); }
+    .sr-body { font-size: 0.83rem; line-height: 1.6; color: var(--text); }
 
     .hl {
         background: linear-gradient(120deg, #fed7aa, #fdba74);
         color: var(--text); padding: 1px 3px; border-radius: 3px; font-weight: 600;
     }
-
-    .ent-person {
-        background: #dbeafe; color: #1d4ed8;
-        padding: 1px 5px; border-radius: 3px; font-weight: 600; font-size: 0.88em;
-        border-bottom: 2px solid #93c5fd;
+    .hl-approx {
+        background: var(--blue-bg); color: var(--blue);
+        padding: 1px 3px; border-radius: 3px; font-weight: 600;
+        border-bottom: 2px dashed var(--blue);
     }
-    .ent-org {
-        background: #d1fae5; color: #065f46;
-        padding: 1px 5px; border-radius: 3px; font-weight: 600; font-size: 0.88em;
-        border-bottom: 2px solid #6ee7b7;
-    }
-    .ent-place {
-        background: #fef3c7; color: #92400e;
-        padding: 1px 5px; border-radius: 3px; font-weight: 600; font-size: 0.88em;
-        border-bottom: 2px solid #fcd34d;
-    }
-    .ent-date {
-        background: #f3e8ff; color: #6b21a8;
-        padding: 1px 5px; border-radius: 3px; font-weight: 600; font-size: 0.88em;
-        border-bottom: 2px solid #d8b4fe;
-    }
-    .ent-other {
-        background: #f1f5f9; color: #475569;
-        padding: 1px 5px; border-radius: 3px; font-weight: 600; font-size: 0.88em;
-        border-bottom: 2px solid #cbd5e1;
-    }
-
-    .lead-box {
-        background: linear-gradient(135deg, #fff7ed, #fef3c7);
-        border: 1px solid var(--primary-subtle);
-        border-radius: var(--radius-sm);
-        padding: 16px 20px;
-        margin: 8px 0;
-    }
-    .lead-titular {
-        font-size: 1.05rem; font-weight: 700; color: var(--text);
-        line-height: 1.3; margin-bottom: 8px;
-    }
-    .lead-subtitular {
-        font-size: 0.85rem; color: var(--text-secondary);
-        font-weight: 500; margin-bottom: 10px; line-height: 1.4;
-    }
-    .lead-body {
-        font-size: 0.83rem; line-height: 1.7; color: var(--text);
-        border-top: 1px solid var(--primary-subtle); padding-top: 10px;
-    }
-    .lead-label {
-        font-size: 0.62rem; font-weight: 700; text-transform: uppercase;
-        color: var(--primary); letter-spacing: 0.05em; margin-bottom: 4px;
-    }
-
-    .seg-viewer {
-        background: var(--surface); border: 1px solid var(--border);
-        border-radius: var(--radius-sm); max-height: 100%; overflow-y: auto;
-        padding: 6px 2px;
-    }
-    .seg-viewer::-webkit-scrollbar { width: 4px; }
-    .seg-viewer::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
-    .seg-row {
-        display: flex; align-items: flex-start; gap: 8px;
-        padding: 5px 10px; border-radius: 6px; margin: 1px 4px;
-        transition: background 0.15s; cursor: pointer;
-        border-left: 3px solid transparent;
-    }
-    .seg-row:hover { background: var(--primary-light); }
-    .seg-row.active {
-        background: linear-gradient(90deg, #fff7ed, #ffedd5);
-        border-left-color: var(--primary);
-    }
-    .seg-ts {
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 0.62rem; color: var(--primary);
-        background: var(--primary-light); padding: 2px 5px;
-        border-radius: 3px; white-space: nowrap; margin-top: 2px;
-        min-width: 44px; text-align: center;
-    }
-    .seg-txt { font-size: 0.81rem; line-height: 1.55; color: var(--text-secondary); }
-    .seg-row.active .seg-txt { font-weight: 500; color: var(--text); }
 
     .full-text-box {
         background: var(--surface); border: 1px solid var(--border);
         border-radius: var(--radius-sm); padding: 14px 18px;
         font-size: 0.84rem; line-height: 1.85; color: var(--text);
-        height: 100%; max-height: 620px; overflow-y: auto;
+        max-height: 620px; overflow-y: auto;
     }
     .full-text-box::-webkit-scrollbar { width: 5px; }
     .full-text-box::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
@@ -276,22 +177,11 @@ st.markdown("""
         text-align: center; padding: 16px; color: var(--text-secondary);
         background: var(--bg); border-radius: var(--radius-sm); border: 1px dashed var(--border);
     }
-
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 0; background: var(--bg); border-radius: var(--radius-sm);
-        padding: 3px; border: 1px solid var(--border);
+    .similar-banner {
+        background: var(--amber-bg); border: 1px solid #fcd34d; color: #92400e;
+        border-radius: var(--radius-sm); padding: 8px 12px; font-size: 0.78rem;
+        margin-bottom: 8px;
     }
-    .stTabs [data-baseweb="tab"] {
-        font-size: 0.78rem; font-weight: 500; padding: 5px 14px;
-        color: var(--text-secondary); border-radius: var(--radius-xs);
-        border-bottom: none !important; background: transparent;
-    }
-    .stTabs [aria-selected="true"] {
-        color: var(--primary) !important; background: var(--surface) !important;
-        box-shadow: var(--shadow-xs) !important;
-    }
-    .stTabs [data-baseweb="tab-panel"] { padding-top: 8px; }
-    .stTabs [data-baseweb="tab-highlight"], .stTabs [data-baseweb="tab-border"] { display: none; }
 
     section[data-testid="stSidebar"] { background: var(--surface); border-right: 1px solid var(--border); }
 
@@ -307,16 +197,7 @@ st.markdown("""
     }
 
     .stAudio { margin: 3px 0 6px 0; }
-    .stChatMessage { font-size: 0.87rem; }
     hr { border-color: var(--border) !important; margin: 6px 0 !important; }
-
-    .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; margin: 8px 0; }
-    .kpi-card {
-        background: var(--surface); border: 1px solid var(--border);
-        border-radius: var(--radius-sm); padding: 12px 14px; text-align: center;
-    }
-    .kpi-value { font-size: 1.3rem; font-weight: 700; color: var(--primary); }
-    .kpi-label { font-size: 0.68rem; color: var(--text-muted); margin-top: 2px; text-transform: uppercase; font-weight: 500; }
 
     .coverage-bar-container {
         background: var(--bg); border-radius: 6px; height: 20px;
@@ -331,45 +212,6 @@ st.markdown("""
     .coverage-warn { background: linear-gradient(90deg, #d97706, #f59e0b); }
     .coverage-bad { background: linear-gradient(90deg, #dc2626, #ef4444); }
 
-    .hist-card {
-        background: var(--surface); border: 1px solid var(--border);
-        border-radius: var(--radius-sm); padding: 10px 14px;
-        margin-bottom: 6px; cursor: pointer; transition: var(--transition);
-    }
-    .hist-card:hover { border-color: var(--primary-subtle); box-shadow: var(--shadow-sm); }
-    .hist-card.active { border-color: var(--primary); border-left: 3px solid var(--primary); }
-    .hist-card-name { font-size: 0.82rem; font-weight: 600; color: var(--text); margin-bottom: 3px; }
-    .hist-card-meta { font-size: 0.7rem; color: var(--text-muted); }
-
-    .wf-row {
-        display: flex; align-items: center; gap: 10px;
-        margin: 3px 0; font-size: 0.78rem;
-    }
-    .wf-word {
-        width: 140px; min-width: 140px;
-        font-weight: 600; color: var(--text);
-        text-align: right; overflow: hidden;
-        text-overflow: ellipsis; white-space: nowrap;
-    }
-    .wf-bar-bg {
-        flex: 1; background: var(--bg);
-        border-radius: 4px; height: 20px;
-        overflow: hidden; border: 1px solid var(--border);
-    }
-    .wf-bar-fill {
-        height: 100%; border-radius: 3px;
-        background: linear-gradient(90deg, #fed7aa, #ea580c);
-        display: flex; align-items: center;
-        padding-left: 6px;
-        font-size: 0.65rem; font-weight: 700; color: white;
-        min-width: 24px;
-    }
-    .wf-count {
-        width: 36px; min-width: 36px;
-        text-align: right; color: var(--text-secondary);
-        font-size: 0.72rem; font-weight: 500;
-    }
-
     .ts-jump-btn {
         display: inline-flex; align-items: center; gap: 4px;
         font-family: 'JetBrains Mono', monospace;
@@ -383,20 +225,13 @@ st.markdown("""
         background: var(--primary-subtle); border-color: var(--primary); transform: scale(1.02);
     }
     .ts-jump-btn:active { transform: scale(0.98); }
-
-    .ent-error-box {
-        background: var(--red-bg); border: 1px solid #fca5a5;
-        border-radius: var(--radius-sm); padding: 10px 14px;
-        font-size: 0.8rem; color: var(--red); margin-top: 8px;
-    }
 </style>
 """, unsafe_allow_html=True)
 
 
 # ============================================================
-# JAVASCRIPT
+# JAVASCRIPT (salto de audio)
 # ============================================================
-
 def inject_audio_js():
     components.html("""
     <script>
@@ -431,61 +266,37 @@ def make_ts_button_html(time_seconds, label=None):
 # ============================================================
 # SESSION STATE
 # ============================================================
-AUDIO_DEFAULTS = {
-    "transcript_text": None, "transcript_segments": None, "corrected_segments": None,
-    "raw_transcript": None, "audio_path": None, "audio_start_time": 0,
-    "correction_applied": False, "analysis_cache": {}, "uploaded_filename": None,
-    "audio_duration_ms": 0, "coverage_pct": 100.0, "transcript_gaps": [],
-    "chunks_used": 1, "active_segment_idx": -1, "entities": None,
-    "lead_cache": None, "custom_vocabulary": "",
+DEFAULTS = {
+    "authenticated": False,
+    "pydub_available": None,
+    "transcript_text": None,
+    "transcript_segments": None,
+    "corrected_segments": None,
+    "raw_transcript": None,
+    "audio_path": None,
+    "audio_start_time": 0,
+    "correction_applied": False,
+    "uploaded_filename": None,
+    "audio_duration_ms": 0,
+    "coverage_pct": 100.0,
+    "transcript_gaps": [],
+    "chunks_used": 1,
+    "active_segment_idx": -1,
+    "custom_vocabulary": "",
+    "search_query": "",
+    "_audio_widget_key": 0,
 }
 
-GLOBAL_DEFAULTS = {
-    "authenticated": False, "pydub_available": None, "chat_history": [],
-    "search_results": None, "last_search_query": "", "global_search_results": None,
-    "last_global_query": "", "audio_history": [], "active_audio_id": None,
-    "_search_pending": False, "_global_search_pending": False, "_audio_widget_key": 0,
-}
-
-for k, v in {**AUDIO_DEFAULTS, **GLOBAL_DEFAULTS}.items():
+for k, v in DEFAULTS.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
 
-# ============================================================
-# HISTORIAL
-# ============================================================
-MAX_HISTORY = 6
-
-def history_save_current():
-    aid = st.session_state.active_audio_id
-    if not aid or not st.session_state.transcript_text: return
-    snapshot = {k: st.session_state[k] for k in AUDIO_DEFAULTS}
-    snapshot["id"] = aid; snapshot["saved_at"] = datetime.now().isoformat()
-    hist = st.session_state.audio_history
-    for i, h in enumerate(hist):
-        if h["id"] == aid: hist[i] = snapshot; return
-    if len(hist) >= MAX_HISTORY: hist.pop(0)
-    hist.append(snapshot)
-
-def history_load(audio_id):
-    for h in st.session_state.audio_history:
-        if h["id"] == audio_id:
-            for k in AUDIO_DEFAULTS: st.session_state[k] = h.get(k, AUDIO_DEFAULTS[k])
-            st.session_state.active_audio_id = audio_id
-            st.session_state.chat_history = []
-            st.session_state.search_results = None
-            st.session_state.last_search_query = ""
-            return True
-    return False
-
-def history_new_id(): return f"audio_{int(time.time() * 1000)}"
-
-def reset_current_audio():
-    for k, v in AUDIO_DEFAULTS.items(): st.session_state[k] = v
-    st.session_state.chat_history = []
-    st.session_state.search_results = None
-    st.session_state.last_search_query = ""
+def reset_transcript_state():
+    keep = {"authenticated", "pydub_available"}
+    for k, v in DEFAULTS.items():
+        if k not in keep:
+            st.session_state[k] = v
 
 
 # ============================================================
@@ -498,7 +309,6 @@ def check_pydub_ffmpeg():
         from pydub import AudioSegment
     except ImportError:
         st.session_state.pydub_available = False; return False, "pydub no instalado"
-    import shutil
     ffmpeg_bin = shutil.which("ffmpeg")
     if not ffmpeg_bin:
         for c in ["/usr/bin/ffmpeg", "/usr/local/bin/ffmpeg"]:
@@ -533,39 +343,6 @@ def norm(text):
     if not text: return ""
     t = unicodedata.normalize('NFD', text)
     return ''.join(c for c in t if unicodedata.category(c) != 'Mn').lower().strip()
-
-def highlight_html(text, query):
-    if not query or not text: return text
-    result = text; pat = re.compile(re.escape(query), re.IGNORECASE)
-    if pat.search(result):
-        return pat.sub(lambda m: f"<span class='hl'>{m.group()}</span>", result)
-    for w in query.split():
-        if len(w) > 1:
-            result = re.compile(re.escape(w), re.IGNORECASE).sub(
-                lambda m: f"<span class='hl'>{m.group()}</span>", result)
-    return result
-
-def highlight_full_text(text, query):
-    if not query or not text: return text
-    result = text; pat = re.compile(re.escape(query), re.IGNORECASE)
-    if pat.search(result):
-        return pat.sub(lambda m: f"<span class='hl'>{m.group()}</span>", result)
-    for w in [w for w in query.split() if len(w) > 1]:
-        result = re.compile(r'(?<![<\w])(' + re.escape(w) + r')(?![>\w])', re.IGNORECASE).sub(
-            r"<span class='hl'>\1</span>", result)
-    return result
-
-def count_occurrences(text, query):
-    if not query or not text: return 0
-    count = len(re.findall(re.escape(query), text, re.IGNORECASE))
-    if count == 0:
-        for w in query.split():
-            if len(w) > 1: count += len(re.findall(re.escape(w), text, re.IGNORECASE))
-    return count
-
-def get_audio_duration(segments):
-    if not segments: return 0
-    return max(float(seg.get("end", 0)) for seg in segments)
 
 def build_timestamped_transcript(segments):
     return "\n".join(f"[{fmt_time(float(seg.get('start', 0)))}] {seg.get('text', '').strip()}"
@@ -610,7 +387,7 @@ def get_client():
 
 
 # ============================================================
-# AUDIO PROCESSING
+# PROCESAMIENTO DE AUDIO (precisión)
 # ============================================================
 def save_uploaded(f):
     try:
@@ -621,28 +398,33 @@ def save_uploaded(f):
     except: return None
 
 def convert_to_mp3(input_path, status_writer=None):
-    import shutil
     ext = os.path.splitext(input_path)[1].lower()
     size_mb = os.path.getsize(input_path) / (1024 * 1024)
-    if ext == ".mp3" and size_mb < 24: return input_path, False
     ffmpeg_bin = shutil.which("ffmpeg")
     if not ffmpeg_bin:
         for c in ["/usr/bin/ffmpeg", "/usr/local/bin/ffmpeg"]:
             if os.path.isfile(c): ffmpeg_bin = c; break
-    if not ffmpeg_bin: return input_path, False
-    out_path = input_path.rsplit(".", 1)[0] + "_converted.mp3"
-    if status_writer: status_writer.write(f"🔄 Convirtiendo a MP3 ({size_mb:.0f} MB)...")
-    import subprocess
+    # Siempre normalizamos el audio (mono, 16kHz, volumen) para mejorar precisión del ASR,
+    # incluso si ya es mp3, salvo que ffmpeg no esté disponible.
+    if not ffmpeg_bin:
+        return input_path, False
+    out_path = input_path.rsplit(".", 1)[0] + "_norm.mp3"
+    if status_writer: status_writer.write(f"🔄 Normalizando audio para mayor precisión ({size_mb:.0f} MB)...")
     cmd = [ffmpeg_bin, "-y", "-i", input_path, "-vn", "-acodec", "libmp3lame",
-           "-ac", "1", "-ar", "16000", "-b:a", "64k", "-af", "aresample=16000,volume=1.5", out_path]
+           "-ac", "1", "-ar", "16000", "-b:a", "128k",
+           "-af", "highpass=f=80,lowpass=f=8000,afftdn=nr=10,dynaudnorm,aresample=16000",
+           out_path]
     try:
         result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=300)
         if result.returncode != 0:
-            cmd2 = [ffmpeg_bin, "-y", "-i", input_path, "-vn", "-acodec", "libmp3lame", "-ac", "1", "-b:a", "64k", out_path]
+            cmd2 = [ffmpeg_bin, "-y", "-i", input_path, "-vn", "-acodec", "libmp3lame",
+                    "-ac", "1", "-ar", "16000", "-b:a", "128k", "-af", "aresample=16000,volume=1.5", out_path]
             r2 = subprocess.run(cmd2, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=300)
-            if r2.returncode != 0: return input_path, False
+            if r2.returncode != 0:
+                return input_path, False
         return out_path, True
-    except: return input_path, False
+    except:
+        return input_path, False
 
 def get_audio_info(path):
     ok, _ = check_pydub_ffmpeg()
@@ -652,7 +434,7 @@ def get_audio_info(path):
         audio = AudioSegment.from_file(path); return len(audio), audio
     except Exception as e: st.warning(f"⚠️ {e}"); return None, None
 
-def split_audio_chunks(audio_segment, chunk_duration_ms=600_000, overlap_ms=30_000):
+def split_audio_chunks(audio_segment, chunk_duration_ms=480_000, overlap_ms=35_000):
     total_ms = len(audio_segment); chunks = []
     if total_ms <= chunk_duration_ms:
         p = os.path.join(tempfile.gettempdir(), "chunk_0.mp3")
@@ -698,7 +480,7 @@ def transcribe_single(client, path, model, prompt=None, max_retries=3):
             else: return None, None, err_str
     return None, None, "Max retries"
 
-def merge_chunk_segments(all_chunk_results, overlap_ms=30_000):
+def merge_chunk_segments(all_chunk_results, overlap_ms=35_000):
     if not all_chunk_results: return [], ""
     if len(all_chunk_results) == 1: return all_chunk_results[0]["segments"], all_chunk_results[0]["text"]
     merged = []
@@ -780,7 +562,7 @@ def transcribe_complete(client, path, model, prompt=None, ps=None):
         return text, segs, int(ds*1000), calculate_coverage(segs, ds), [], 1
     ds = dur_ms / 1000.0
     if ps: ps.write(f"⏱️ {fmt_duration(ds)}")
-    chunks = split_audio_chunks(audio_seg, overlap_ms=30_000)
+    chunks = split_audio_chunks(audio_seg, overlap_ms=35_000)
     nc = len(chunks)
     if ps: ps.write(f"✂️ {nc} parte{'s' if nc > 1 else ''}")
     all_res = []
@@ -795,9 +577,8 @@ def transcribe_complete(client, path, model, prompt=None, ps=None):
         try: os.remove(ch["path"])
         except: pass
     if not all_res: return None, None, dur_ms, 0, [], nc
-    merged, ft = merge_chunk_segments(all_res, overlap_ms=30_000)
-    
-    # [INTEGRACIÓN MEJORA 2] Filtrar alucinaciones antes de calcular cobertura
+    merged, ft = merge_chunk_segments(all_res, overlap_ms=35_000)
+
     merged = filter_hallucinations(merged)
     ft = " ".join(s["text"] for s in merged if not s.get("hallucination_suspect"))
 
@@ -815,30 +596,21 @@ def transcribe_complete(client, path, model, prompt=None, ps=None):
                 if not any(abs(seg["start"]-e["start"]) < 1.5 and SequenceMatcher(None, norm(seg["text"]), norm(e["text"])).ratio() > 0.6 for e in dd[-10:]):
                     dd.append(seg)
             merged = dd; ft = " ".join(s["text"] for s in merged)
-            cov = calculate_coverage(merged, ds); gaps = find_coverage_gaps(merged, ds, gap_threshold=th)
+            cov = calculate_coverage(merged, ds); gaps = find_coverage_gaps(merged, ds, threshold=th)
         else: break
     if ps: ps.write(f"✅ Cobertura: {cov:.1f}%")
     return ft, merged, dur_ms, cov, gaps, nc
 
 
 # ============================================================
-# POST-PROCESAMIENTO
+# FILTRO DE ALUCINACIONES (mejora la precisión real del texto)
 # ============================================================
-
-# [INTEGRACIÓN MEJORA 2] Filtro de alucinaciones de Whisper
 def filter_hallucinations(segments, min_unique_ratio=0.4, max_repeat_ratio=0.7):
-    """
-    Detecta y elimina segmentos que probablemente son alucinaciones de Whisper.
-    Criterios:
-    - Segmentos que repiten casi literalmente el anterior (Whisper "se atora")
-    - Segmentos con ratio de palabras únicas muy bajo (el modelo repite las mismas 2-3 palabras)
-    - Segmentos sospechosamente cortos en un gap largo de audio
-    """
     if not segments:
         return segments
 
     cleaned = []
-    for i, seg in enumerate(segments):
+    for seg in segments:
         text = seg.get("text", "").strip()
         if not text:
             continue
@@ -846,31 +618,25 @@ def filter_hallucinations(segments, min_unique_ratio=0.4, max_repeat_ratio=0.7):
         words = text.lower().split()
         n_words = len(words)
 
-        # 1. Segmento demasiado corto para ser real (menos de 2 palabras)
         if n_words < 2:
             cleaned.append(seg)
             continue
 
-        # 2. Ratio de palabras únicas — detecta loops tipo "gracias gracias gracias"
         unique_ratio = len(set(words)) / n_words
         if unique_ratio < min_unique_ratio and n_words > 4:
-            # Marcar como posible alucinación en lugar de eliminar
             seg = dict(seg)
             seg["hallucination_suspect"] = True
             seg["text"] = f"[⚠️ segmento dudoso: {text[:60]}]"
             cleaned.append(seg)
             continue
 
-        # 3. Comparar con el segmento anterior — Whisper a veces repite el mismo párrafo
         if cleaned:
             prev_text = norm(cleaned[-1].get("text", ""))
             curr_text = norm(text)
             similarity = SequenceMatcher(None, prev_text, curr_text).ratio()
             if similarity > max_repeat_ratio:
-                # Es una repetición — descartar el actual
                 continue
 
-        # 4. Frases fantasma conocidas que Whisper genera en silencio
         PHANTOM_PHRASES = [
             "suscríbete", "subscríbete", "subscribe",
             "gracias por ver", "thanks for watching",
@@ -886,6 +652,11 @@ def filter_hallucinations(segments, min_unique_ratio=0.4, max_repeat_ratio=0.7):
 
     return cleaned
 
+
+# ============================================================
+# POST-PROCESAMIENTO: vocabulario + corrección ortográfica
+# (usa el mismo modelo Groq de texto que ya se usaba: llama-3.3-70b-versatile)
+# ============================================================
 def post_correct_with_vocabulary(client, text, segments, custom_vocab):
     if not custom_vocab or not custom_vocab.strip(): return text, segments
     vocab_terms = [t.strip() for line in custom_vocab.replace(",", "\n").split("\n") for t in [line.strip()] if t and len(t) > 1]
@@ -968,348 +739,89 @@ def correct_and_align(client, raw_text, segments):
 
 
 # ============================================================
-# BÚSQUEDA
+# BÚSQUEDA AVANZADA
+# Exacta (tolerante a acentos y mayúsculas) -> si no hay resultados,
+# cae automáticamente a coincidencias similares/variaciones (typos).
 # ============================================================
-def search_segments(query, segments, corrected_segments, context_words=30, fuzzy_thresh=0.75):
-    if not query: return []
-    target = corrected_segments if corrected_segments else segments
-    if not target: return []
-    q_norm = norm(query); q_words = q_norm.split()
-    if not q_words: return []
-    all_words = [(w, si) for si, seg in enumerate(target) for w in seg.get("text", "").split()]
-    if not all_words: return []
-    search_norm = [norm(w) for w, _ in all_words]; found = []
-    for i in range(len(search_norm) - len(q_words) + 1):
-        if q_norm in " ".join(search_norm[i:i+len(q_words)]):
-            found.append({"pos": i, "len": len(q_words), "conf": "high", "score": 1.0, "seg": all_words[i][1]})
-    if not found:
-        for i, wn in enumerate(search_norm):
-            for qw in q_words:
-                if len(qw) > 2 and qw in wn:
-                    found.append({"pos": i, "len": 1, "conf": "high", "score": 0.95, "seg": all_words[i][1]}); break
-    if not found and fuzzy_thresh < 1.0:
-        offset = 0
-        for si, seg in enumerate(target):
-            st_txt = seg.get("text", ""); sc = SequenceMatcher(None, q_norm, norm(st_txt)).ratio()
-            if sc >= fuzzy_thresh:
-                found.append({"pos": offset, "len": len(st_txt.split()), "conf": "medium" if sc > 0.85 else "low", "score": sc, "seg": si})
-            offset += len(st_txt.split())
-    seen, results = set(), []
-    for fp in found:
-        if fp["seg"] in seen: continue
-        seen.add(fp["seg"]); seg = target[fp["seg"]]
-        p, ln = fp["pos"], fp["len"]
-        cs, ce = max(0, p-context_words), min(len(all_words), p+ln+context_words)
-        me = min(p+ln, len(all_words))
-        results.append({
-            "start_time": float(seg.get("start", 0)), "end_time": float(seg.get("end", 0)),
-            "time_label": fmt_time(float(seg.get("start", 0))), "end_label": fmt_time(float(seg.get("end", 0))),
-            "before": " ".join(all_words[j][0] for j in range(cs, p)),
-            "match_hl": highlight_html(" ".join(all_words[j][0] for j in range(p, me)), query),
-            "after": " ".join(all_words[j][0] for j in range(me, ce)),
-            "confidence": fp["conf"], "score": fp["score"], "idx": fp["seg"],
-            "full_segment": seg.get("text", ""),
-            "prev_segment": target[fp["seg"]-1].get("text", "") if fp["seg"] > 0 else "",
-            "next_segment": target[fp["seg"]+1].get("text", "") if fp["seg"] < len(target)-1 else "",
-        })
-    results.sort(key=lambda x: x["score"], reverse=True); return results
+_ACCENT_MAP = {
+    'a': '[aáàâä]', 'e': '[eéèêë]', 'i': '[iíìîï]', 'o': '[oóòôö]',
+    'u': '[uúùûü]', 'n': '[nñ]', 'c': '[cç]',
+}
 
-def global_search(query, audio_history, fuzzy_thresh=0.75):
-    if not query or not audio_history: return []
-    all_results = []
-    for audio in audio_history:
-        segs = audio.get("corrected_segments") or audio.get("transcript_segments") or []
-        fname = audio.get("uploaded_filename", "audio"); aid = audio.get("id", "")
-        hits = search_segments(query, segs, audio.get("corrected_segments"), context_words=20, fuzzy_thresh=fuzzy_thresh)
-        for h in hits: h["audio_id"] = aid; h["audio_name"] = fname
-        all_results.extend(hits)
-    all_results.sort(key=lambda x: x["score"], reverse=True); return all_results
+def _build_accent_pattern(word):
+    out = []
+    for ch in word:
+        low = ch.lower()
+        out.append(_ACCENT_MAP.get(low, re.escape(ch)))
+    return ''.join(out)
 
-
-# ============================================================
-# IA: ENTIDADES — VERSIÓN ROBUSTA
-# ============================================================
-
-def _parse_entities_json(raw_content):
-    if not raw_content or not isinstance(raw_content, str):
+def compile_query_pattern(query):
+    query = (query or "").strip()
+    if not query: return None
+    words = [w for w in re.split(r'\s+', query) if w]
+    if not words: return None
+    parts = [_build_accent_pattern(w) for w in words]
+    try:
+        return re.compile(r'\s+'.join(parts), re.IGNORECASE)
+    except re.error:
         return None
 
-    text = raw_content.strip()
-    text = re.sub(r"```(?:json)?\s*", "", text)
-    text = re.sub(r"```\s*", "", text)
-    text = text.strip()
+def determine_search_mode(query, segments):
+    """Devuelve (pattern, modo). modo = 'exacta' si hay al menos una coincidencia
+    exacta (con variaciones de acentos/mayúsculas) en algún segmento; si no,
+    'similar' para activar la búsqueda difusa (typos / variaciones)."""
+    pattern = compile_query_pattern(query)
+    if pattern:
+        for seg in segments:
+            if pattern.search(seg.get("text", "")):
+                return pattern, "exacta"
+    return pattern, "similar"
 
-    try:
-        parsed = json.loads(text)
-        if isinstance(parsed, dict):
-            return parsed
-    except json.JSONDecodeError:
-        pass
-
-    brace_match = re.search(r'\{[\s\S]*\}', text)
-    if brace_match:
-        try:
-            parsed = json.loads(brace_match.group())
-            if isinstance(parsed, dict):
-                return parsed
-        except json.JSONDecodeError:
-            pass
-
-    try:
-        fixed = text.replace("'", '"')
-        parsed = json.loads(fixed)
-        if isinstance(parsed, dict):
-            return parsed
-    except json.JSONDecodeError:
-        pass
-
-    result = {}
-    list_pattern = re.compile(
-        r'"?(personas|organizaciones|lugares|fechas|otros)"?\s*:\s*\[([^\]]*)\]',
-        re.IGNORECASE | re.DOTALL
-    )
-    for match in list_pattern.finditer(text):
-        key = match.group(1).lower()
-        items_raw = match.group(2)
-        items = re.findall(r'"([^"]+)"', items_raw)
-        if not items:
-            items = [i.strip().strip("'") for i in items_raw.split(",") if i.strip().strip("'")]
-        result[key] = items
-
-    if result:
-        return result
-
-    return None
-
-
-def extract_entities(client, text):
-    if st.session_state.entities is not None:
-        return st.session_state.entities
-
-    if not isinstance(text, str) or not text.strip():
-        fallback = {k: [] for k in ["personas", "organizaciones", "lugares", "fechas", "otros"]}
-        st.session_state.entities = fallback
-        return fallback
-
-    text_to_analyze = text[:8000] if len(text) > 8000 else text
-
-    system = """Eres un extractor de entidades nombradas para periodismo.
-Analiza el texto y extrae:
-- PERSONAS: nombres de personas mencionadas
-- ORGANIZACIONES: empresas, instituciones, partidos, medios
-- LUGARES: países, ciudades, regiones, direcciones
-- FECHAS: fechas, períodos, referencias temporales
-- OTROS: conceptos clave relevantes para la noticia
-
-IMPORTANTE: Responde ÚNICAMENTE con un objeto JSON válido, sin texto adicional antes ni después.
-El formato debe ser exactamente:
-{
-  "personas": ["nombre1", "nombre2"],
-  "organizaciones": ["org1", "org2"],
-  "lugares": ["lugar1", "lugar2"],
-  "fechas": ["fecha1", "fecha2"],
-  "otros": ["concepto1", "concepto2"]
-}
-No incluyas explicaciones, comentarios ni bloques de código markdown."""
-
-    last_error = None
-
-    for attempt in range(3):
-        try:
-            temp = 0.0 if attempt == 0 else (0.1 if attempt == 1 else 0.2)
-            r = client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                messages=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": f"Extrae las entidades de este texto:\n\n{text_to_analyze}"}
-                ],
-                temperature=temp,
-                max_tokens=1000
-            )
-
-            raw_content = r.choices[0].message.content
-            parsed = _parse_entities_json(raw_content)
-
-            if parsed is not None:
-                result = {}
-                for key in ["personas", "organizaciones", "lugares", "fechas", "otros"]:
-                    val = parsed.get(key, [])
-                    if isinstance(val, list):
-                        result[key] = [str(item).strip() for item in val if item and str(item).strip()]
-                    else:
-                        result[key] = []
-                st.session_state.entities = result
-                return result
-
-            last_error = f"No se pudo parsear el JSON en intento {attempt + 1}"
-
-        except Exception as e:
-            last_error = str(e)
-            if attempt < 2:
-                time.sleep(1)
-
-    st.session_state._entities_error = last_error
-    fallback = {k: [] for k in ["personas", "organizaciones", "lugares", "fechas", "otros"]}
-    st.session_state.entities = fallback
-    return fallback
-
-
-def highlight_entities_in_text(text, entities):
-    if not entities or not text: return text
-    pairs = []
-    for key, cls in [("personas", "ent-person"), ("organizaciones", "ent-org"), ("lugares", "ent-place"), ("fechas", "ent-date")]:
-        for ent in entities.get(key, []):
-            if ent and len(ent) > 2: pairs.append((ent, cls))
-    pairs.sort(key=lambda x: len(x[0]), reverse=True)
+def _fuzzy_highlight(text, q_words, fuzzy_thresh):
+    """Resalta y detecta palabras similares (variaciones/typos) a la consulta."""
+    found = False
     result = text
-    for term, cls in pairs:
-        result = re.compile(r'(?<![<\w])(' + re.escape(term) + r')(?![>\w\-])', re.IGNORECASE).sub(
-            lambda m: f"<span class='{cls}'>{m.group()}</span>", result)
-    return result
+    seen = set()
+    for tok in re.findall(r"\S+", text):
+        core = re.sub(r'^\W+|\W+$', '', tok)
+        wn = norm(core)
+        if not wn or len(wn) < 3 or tok in seen:
+            continue
+        best = 0.0
+        for qw in q_words:
+            if len(qw) < 3:
+                continue
+            ratio = SequenceMatcher(None, qw, wn).ratio()
+            if ratio > best:
+                best = ratio
+        if best >= fuzzy_thresh:
+            seen.add(tok)
+            found = True
+            result = result.replace(tok, f"<span class='hl-approx'>{tok}</span>", 1)
+    return found, result
 
-def render_entity_panel(entities):
-    if not entities: return
-    cats = [
-        ("personas", "ent-person", "👤 Personas"),
-        ("organizaciones", "ent-org", "🏛️ Organizaciones"),
-        ("lugares", "ent-place", "📍 Lugares"),
-        ("fechas", "ent-date", "📅 Fechas"),
-        ("otros", "ent-other", "🏷️ Conceptos clave")
-    ]
-    html_parts = []
-    has_any = False
-    for key, cls, label in cats:
-        items = entities.get(key, [])
-        if items:
-            has_any = True
-            tags = " ".join(f"<span class='{cls}'>{e}</span>" for e in items)
-            html_parts.append(
-                f"<div style='margin-bottom:12px'>"
-                f"<div style='font-size:0.7rem;font-weight:700;text-transform:uppercase;"
-                f"letter-spacing:0.05em;color:var(--text-muted);margin-bottom:6px'>{label}</div>"
-                f"<div style='display:flex;flex-wrap:wrap;gap:6px'>{tags}</div></div>"
-            )
-    if html_parts:
-        st.markdown("".join(html_parts), unsafe_allow_html=True)
-    elif not has_any:
-        st.caption("No se detectaron entidades en el texto.")
+def highlight_and_check(text, pattern, q_words, fuzzy_thresh, mode):
+    """Determina si un segmento coincide con la búsqueda (según el modo) y
+    devuelve el texto con el resaltado HTML correspondiente."""
+    if mode == "exacta":
+        if pattern and pattern.search(text):
+            html = pattern.sub(lambda m: f"<span class='hl'>{m.group()}</span>", text)
+            return True, html
+        return False, text
+    elif mode == "similar":
+        return _fuzzy_highlight(text, q_words, fuzzy_thresh)
+    return False, text
 
-
-# ============================================================
-# IA: LEAD
-# ============================================================
-def generate_lead(client, text, filename=""):
-    if st.session_state.lead_cache is not None: return st.session_state.lead_cache
-
-    if not isinstance(text, str) or not text.strip():
-        fallback = {"titular": "Sin texto", "subtitulo": "", "lead": "No hay texto para analizar.", "contexto": ""}
-        st.session_state.lead_cache = fallback
-        return fallback
-
-    system = """Eres un periodista experto en redacción noticiosa.
-Con base en la siguiente transcripción de audio, redacta:
-1. Un TITULAR periodístico impactante y preciso (máximo 12 palabras)
-2. Un SUBTÍTULO que amplíe el titular (máximo 20 palabras)
-3. Un LEAD noticioso que responda Qué, Quién, Cuándo, Dónde, Por qué (2-3 oraciones, máximo 60 palabras)
-4. Un CONTEXTO breve con los antecedentes más relevantes (máximo 3 oraciones)
-
-Responde ÚNICAMENTE con un objeto JSON válido, sin texto adicional:
-{
-  "titular": "...",
-  "subtitulo": "...",
-  "lead": "...",
-  "contexto": "..."
-}"""
-    try:
-        r = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": text[:10000]}
-            ],
-            temperature=0.2, max_tokens=600
-        )
-        raw = r.choices[0].message.content.strip()
-        raw = re.sub(r"```(?:json)?\s*", "", raw)
-        raw = re.sub(r"```\s*", "", raw).strip()
-
-        brace_match = re.search(r'\{[\s\S]*\}', raw)
-        if brace_match:
-            result = json.loads(brace_match.group())
-        else:
-            result = json.loads(raw)
-
-        st.session_state.lead_cache = result
-        return result
-    except Exception as e:
-        fallback = {
-            "titular": "No se pudo generar",
-            "subtitulo": "",
-            "lead": f"Error al generar el lead: {str(e)[:100]}",
-            "contexto": ""
-        }
-        st.session_state.lead_cache = fallback
-        return fallback
+def count_exact_occurrences(text, pattern):
+    if not pattern or not text: return 0
+    return len(pattern.findall(text))
 
 
 # ============================================================
-# IA: ANÁLISIS
-# ============================================================
-def ai_generate(client, system_prompt, user_content, max_tokens=2048, temp=0.1):
-    try:
-        r = client.chat.completions.create(model="llama-3.3-70b-versatile",
-            messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_content}],
-            temperature=temp, max_tokens=max_tokens)
-        return r.choices[0].message.content.strip()
-    except Exception as e: return f"Error: {e}"
-
-def generate_summary(client, text):
-    if "summary" in st.session_state.analysis_cache: return st.session_state.analysis_cache["summary"]
-    system = ("Eres un asistente experto en crear resúmenes claros en español. "
-              "Genera un resumen ejecutivo con este formato:\n\n"
-              "## Resumen Ejecutivo\nUn párrafo conciso con lo más importante.\n\n"
-              "## Puntos Clave\nLista de los puntos más importantes (máximo 7).\n\n"
-              "## Conclusiones\nConclusiones principales del contenido.")
-    result = ai_generate(client, system, text[:12000])
-    st.session_state.analysis_cache["summary"] = result; return result
-
-def generate_topics(client, text):
-    if "topics" in st.session_state.analysis_cache: return st.session_state.analysis_cache["topics"]
-    system = ("Analiza la siguiente transcripción y extrae:\n\n"
-              "## Temas Principales\nLista los temas principales discutidos.\n\n"
-              "## Palabras Clave\nEntre 10 y 15 palabras clave relevantes.\n\n"
-              "## Categoría del Contenido\nClasifica el tipo de contenido.\n\nResponde en español.")
-    result = ai_generate(client, system, text[:12000])
-    st.session_state.analysis_cache["topics"] = result; return result
-
-def generate_action_items(client, text):
-    if "actions" in st.session_state.analysis_cache: return st.session_state.analysis_cache["actions"]
-    system = ("Extrae de la siguiente transcripción:\n\n"
-              "## Tareas y Acciones Pendientes\nAcciones mencionadas.\n\n"
-              "## Decisiones Tomadas\nDecisiones durante la conversación.\n\n"
-              "## Preguntas Abiertas\nPreguntas sin responder.\n\n"
-              "## Compromisos\nCompromisos asumidos.\n\nResponde en español.")
-    result = ai_generate(client, system, text[:12000])
-    st.session_state.analysis_cache["actions"] = result; return result
-
-def generate_sentiment(client, text):
-    if "sentiment" in st.session_state.analysis_cache: return st.session_state.analysis_cache["sentiment"]
-    system = ("Analiza tono y sentimiento:\n\n"
-              "## Tono General\nDescribe el tono.\n\n"
-              "## Sentimiento\nPositivo, negativo, neutro o mixto.\n\n"
-              "## Momentos Destacados\nMomentos donde el tono cambia.\n\n"
-              "## Nivel de Formalidad (1-10)\n\nResponde en español.")
-    result = ai_generate(client, system, text[:12000])
-    st.session_state.analysis_cache["sentiment"] = result; return result
-
-
-# ============================================================
-# PROCESO PRINCIPAL
+# PROCESO PRINCIPAL DE TRANSCRIPCIÓN
 # ============================================================
 def process_audio(client, uploaded, model, do_correct, custom_vocab=""):
-    history_save_current()
-    st.session_state.active_audio_id = history_new_id()
-    reset_current_audio()
+    reset_transcript_state()
     with st.status("Procesando audio...", expanded=True) as status:
         path = save_uploaded(uploaded)
         if not path: st.error("Error al guardar"); return False
@@ -1333,7 +845,7 @@ def process_audio(client, uploaded, model, do_correct, custom_vocab=""):
         st.session_state.transcript_gaps = gaps
         st.session_state.chunks_used = chunks_used
         if custom_vocab and custom_vocab.strip():
-            st.write("🏷️ Aplicando vocabulario...")
+            st.write("🏷️ Aplicando vocabulario personalizado...")
             full_text, segments = post_correct_with_vocabulary(client, full_text, segments, custom_vocab)
         if do_correct:
             st.write("✨ Corrigiendo ortografía...")
@@ -1349,62 +861,7 @@ def process_audio(client, uploaded, model, do_correct, custom_vocab=""):
         wc = len(full_text.split())
         cov_icon = "✅" if coverage >= 95 else "⚠️" if coverage >= 80 else "❌"
         status.update(label=f"{cov_icon} {wc:,} palabras · {coverage:.0f}% cobertura", state="complete", expanded=False)
-    history_save_current(); return True
-
-
-# ============================================================
-# VISOR SEGMENTOS — [MEJORADO CON FILTRO REAL]
-# ============================================================
-def render_segment_viewer(segments, active_idx=-1, search_query="", max_height="580px"):
-    if not segments: return
-    rows = []
-    q_norm = norm(search_query) if search_query else ""
-    for i, seg in enumerate(segments):
-        start_sec = float(seg.get("start", 0)); ts = fmt_time(start_sec)
-        text = seg.get("text", "").strip()
-        
-        # [FILTRO REAL] Si hay un término de búsqueda, omitir el segmento si no contiene la coincidencia
-        if q_norm and q_norm not in norm(text):
-            continue
-            
-        display_text = highlight_html(text, search_query) if search_query else text
-        rec = " <span style='color:var(--amber);font-size:0.7em'>🔄</span>" if seg.get("recovered") else ""
-        ac = "active" if i == active_idx else ""
-        rows.append(f"<div class='seg-row {ac}' onclick='window.jumpToTime({start_sec})' style='cursor:pointer'>"
-                    f"<span class='seg-ts'>{ts}</span><span class='seg-txt'>{display_text}{rec}</span></div>")
-    
-    if not rows and search_query:
-        st.markdown(f"<div class='no-results-box'>🔍 Sin coincidencias para '{search_query}'</div>", unsafe_allow_html=True)
-    else:
-        st.markdown(f"<div class='seg-viewer' style='max-height:{max_height}'>{''.join(rows)}</div>", unsafe_allow_html=True)
-
-
-# ============================================================
-# STOPWORDS
-# ============================================================
-STOPWORDS_ES = {
-    'el','la','los','las','un','una','unos','unas','lo','a','ante','bajo','cabe','con','contra','de','del','desde',
-    'en','entre','hacia','hasta','para','por','según','sin','so','sobre','tras','y','e','ni','o','u','pero','mas',
-    'sino','que','como','porque','pues','aunque','cuando','yo','tú','tu','él','ella','ello','nosotros','nosotras',
-    'vosotros','vosotras','ellos','ellas','usted','ustedes','me','te','se','nos','os','le','les','mi','mis','ti',
-    'su','sus','tus','mí','este','esta','esto','estos','estas','ese','esa','eso','esos','esas','aquel','aquella',
-    'aquello','aquellos','aquellas','otro','otra','otros','otras','todo','toda','todos','todas','mucho','mucha',
-    'muchos','muchas','poco','poca','pocos','pocas','algo','nada','nadie','cada','varios','varias','cualquier',
-    'ambos','ambas','demás','qué','quién','cuál','cómo','dónde','cuándo','quien','quienes','cual','cuales',
-    'donde','es','son','era','eran','fue','fueron','sido','ser','siendo','está','están','estaba','estaban',
-    'estuvo','estuvieron','estado','estar','estando','ha','hay','han','había','habían','hubo','habido','haber',
-    'habiendo','tiene','tienen','tenía','tenían','tuvo','tuvieron','tener','tenido','hace','hacen','hacía',
-    'hacían','hizo','hicieron','hacer','hecho','puede','pueden','podía','podían','pudo','pudieron','poder',
-    'va','van','iba','iban','ir','ido','dice','dicen','decía','decían','dijo','dijeron','decir','dicho',
-    'da','dan','daba','daban','dio','dieron','dar','dado','sabe','saben','sabía','sabían','saber','sabido',
-    'quiere','quieren','quería','querían','quiso','quisieron','querer','querido','ve','ven','veía','veían',
-    'vio','vieron','ver','visto','no','sí','si','más','menos','muy','también','tampoco','ya','aún','todavía',
-    'siempre','nunca','jamás','aquí','ahí','allí','bien','mal','antes','después','ahora','luego','así','tan',
-    'solo','sólo','además','incluso','bueno','pues','entonces','digamos','verdad','claro','mira','vamos',
-    'sea','uno','dos','tres','cuatro','cinco','seis','siete','ocho','nueve','diez','vez','veces','parte',
-    'manera','forma','cosa','cosas','tipo','tiempo','día','días','año','años','momento','ejemplo','caso',
-    'mismo','misma','mismos','mismas','tal','al','del','he','has','soy','eres','somos',
-}
+    return True
 
 
 # ============================================================
@@ -1417,49 +874,31 @@ def main_app():
 
     # ── SIDEBAR ──
     with st.sidebar:
-        st.markdown("#### ⚙️ Config")
+        st.markdown("#### ⚙️ Configuración")
         model = st.selectbox("Modelo Whisper", ["whisper-large-v3", "whisper-large-v3-turbo"],
-                             format_func=lambda x: "V3 Precisión" if "turbo" not in x else "V3 Turbo")
-        do_correct = st.toggle("Corrección ortográfica", value=True)
+                             format_func=lambda x: "V3 Precisión (recomendado)" if "turbo" not in x else "V3 Turbo (más rápido)")
+        do_correct = st.toggle("Corrección ortográfica (IA)", value=True)
         st.markdown("---")
-        st.markdown("##### 📝 Vocabulario")
+        st.markdown("##### 📝 Vocabulario personalizado")
+        st.caption("Nombres propios, siglas o términos técnicos que deben transcribirse tal cual.")
         custom_vocab = st.text_area("Vocabulario", value=st.session_state.get("custom_vocabulary", ""),
-            placeholder="Bedout\nstreaming\nMedellín", height=120, label_visibility="collapsed", key="sidebar_vocab")
+            placeholder="Comfenalco\nBedout\nUniversidad Tecnológica de Bolívar", height=120,
+            label_visibility="collapsed", key="sidebar_vocab")
         st.markdown("---")
         st.markdown("##### 🔍 Búsqueda")
-        ctx_w = st.slider("Palabras contexto", 10, 60, 30, step=5)
-        use_fuzzy = st.toggle("Aproximada (fuzzy)", value=True)
-        fuzzy_t = st.slider("Sensibilidad", 0.5, 1.0, 0.75, 0.05) if use_fuzzy else 1.0
+        fuzzy_t = st.slider("Sensibilidad a variaciones/typos", 0.55, 0.95, 0.72, 0.02,
+                            help="Más bajo = encuentra variaciones más lejanas (ej. Comfenalco / Confenalco).")
         st.markdown("---")
         if pydub_ok:
             st.markdown("<div style='font-size:0.7rem;color:#059669;background:#ecfdf5;padding:5px 9px;border-radius:6px;border:1px solid #a7f3d0'>✅ pydub + ffmpeg OK</div>", unsafe_allow_html=True)
         else:
             st.markdown(f"<div style='font-size:0.7rem;color:#d97706;background:#fffbeb;padding:5px 9px;border-radius:6px;border:1px solid #fcd34d'>⚠️ {pydub_msg}</div>", unsafe_allow_html=True)
 
-        # ── NUEVO AUDIO (sidebar) — [MEJORADO CON ETIQUETAS VISIBLES] ──────────────────────────────────
         st.markdown("---")
-        st.markdown("##### ➕ Subir nuevo audio")
-
         if st.session_state.transcript_text:
-            if len(st.session_state.audio_history) >= MAX_HISTORY:
-                st.caption(f"⚠️ Historial lleno ({MAX_HISTORY} audios). Elimina uno desde la pestaña Global.")
-            else:
-                new_file_sidebar = st.file_uploader(
-                    "Selecciona un archivo de audio:",
-                    type=["mp3", "wav", "m4a", "ogg", "mp4"],
-                    label_visibility="visible",
-                    key="upload_sidebar"
-                )
-                if new_file_sidebar:
-                    st.info(f"Seleccionado: **{new_file_sidebar.name}**")
-                    vocab_sb = st.session_state.get("custom_vocabulary", "") or custom_vocab
-                    if st.button("🚀 Transcribir este audio", type="primary", use_container_width=True, key="proc_sidebar"):
-                        if process_audio(client, new_file_sidebar, model, do_correct, custom_vocab=vocab_sb):
-                            st.rerun()
-        else:
-            st.caption("Sube tu primer audio en el centro de la pantalla ↓")
-
-        st.markdown("---")
+            if st.button("🆕 Subir nuevo audio", use_container_width=True):
+                reset_transcript_state()
+                st.rerun()
         if st.button("🚪 Cerrar sesión", use_container_width=True):
             for k in list(st.session_state.keys()): del st.session_state[k]
             st.rerun()
@@ -1470,34 +909,11 @@ def main_app():
         <div class="app-bar-left">
             <div class="app-logo">🎙️</div>
             <span class="app-name">Transcriptor Pro</span>
-            <span class="app-tag">By Johnathan Cortés</span>
+            <span class="app-tag">Transcripción + Búsqueda</span>
         </div>
     </div>""", unsafe_allow_html=True)
 
-    # ── HISTORIAL ──
-    hist = st.session_state.audio_history
-    if hist:
-        chips = "<div class='hist-bar'>"
-        for h in hist:
-            active = h["id"] == st.session_state.active_audio_id
-            cls = "hist-chip active" if active else "hist-chip"
-            fn = h.get("uploaded_filename", "audio")[:22]
-            dur = fmt_duration(get_audio_duration(h.get("corrected_segments") or []))
-            chips += f"<span class='{cls}'><span class='hist-chip-dot'></span>{fn} <span style='opacity:0.7'>· {dur}</span></span>"
-        st.markdown(chips + "</div>", unsafe_allow_html=True)
-        if len(hist) > 1:
-            cols = st.columns(len(hist))
-            for i, h in enumerate(hist):
-                with cols[i]:
-                    fn = h.get("uploaded_filename", f"Audio {i+1}")[:18]
-                    active = h["id"] == st.session_state.active_audio_id
-                    if not active:
-                        if st.button(f"▶ {fn}", key=f"switch_{h['id']}", use_container_width=True):
-                            history_save_current(); history_load(h["id"]); st.rerun()
-                    else:
-                        st.button(f"✓ {fn}", key=f"active_{h['id']}", use_container_width=True, disabled=True)
-
-    # ── SIN TRANSCRIPCIÓN (PANTALLA INICIAL) ──
+    # ── SIN TRANSCRIPCIÓN ──
     if not st.session_state.transcript_text:
         _, col_c, _ = st.columns([1, 2, 1])
         with col_c:
@@ -1505,47 +921,38 @@ def main_app():
                         '<div class="empty-state-title">Sube un archivo de audio</div>'
                         '<div class="empty-state-text">MP3, WAV, M4A, OGG o MP4</div></div>', unsafe_allow_html=True)
             uploaded = st.file_uploader("x", type=["mp3","wav","m4a","ogg","mp4"], label_visibility="collapsed", key="upload_initial")
-            st.markdown("---")
-            with st.expander("📝 Vocabulario personalizado", expanded=False):
-                initial_vocab = st.text_area("Vocabulario", placeholder="Bedout\nstreaming", height=100, label_visibility="collapsed", key="initial_vocab")
             if uploaded and st.button("🚀 Transcribir", type="primary", use_container_width=True):
-                vocab = st.session_state.get("initial_vocab", "") or custom_vocab
-                if process_audio(client, uploaded, model, do_correct, custom_vocab=vocab): st.rerun()
+                if process_audio(client, uploaded, model, do_correct, custom_vocab=custom_vocab): st.rerun()
         return
 
     # ══════════════════════════════════════════════
     # CON TRANSCRIPCIÓN
     # ══════════════════════════════════════════════
     txt = st.session_state.transcript_text
-
     if not isinstance(txt, str):
         txt = str(txt) if txt is not None else ""
         st.session_state.transcript_text = txt
 
     segs = st.session_state.corrected_segments or []
     n_words = len(txt.split())
-    duration = get_audio_duration(segs)
+    duration = max((float(s.get("end", 0)) for s in segs), default=0)
     coverage = st.session_state.coverage_pct
     gaps = st.session_state.transcript_gaps
     chunks_used = st.session_state.chunks_used
     fname_display = st.session_state.uploaded_filename or "audio"
     wpm = round(n_words / max(duration/60, 1)) if duration > 0 else 0
 
-    # ══════════════════════════════════════════════════════════
-    # LAYOUT PRINCIPAL: Columna izquierda fija + Columna derecha con pestañas
-    # ══════════════════════════════════════════════════════════
-    left_col, right_col = st.columns([0.33, 0.67], gap="medium")
+    left_col, right_col = st.columns([0.36, 0.64], gap="medium")
 
+    # ── COLUMNA IZQUIERDA: reproductor + stats ──
     with left_col:
-        # ── REPRODUCTOR ──
         if st.session_state.audio_path:
             st.markdown("<div class='panel-header'>🎵 Reproductor</div>", unsafe_allow_html=True)
-            st.markdown(f"<div style='font-size:0.72rem;color:var(--text-secondary);margin-bottom:4px'>📁 <strong>{fname_display[:28]}</strong></div>", unsafe_allow_html=True)
+            st.markdown(f"<div style='font-size:0.72rem;color:var(--text-secondary);margin-bottom:4px'>📁 <strong>{fname_display[:32]}</strong></div>", unsafe_allow_html=True)
             st.audio(st.session_state.audio_path, start_time=st.session_state.audio_start_time)
 
         inject_audio_js()
 
-        # ── STATS COMPACTAS ──
         corr_chip = "stat-chip stat-chip-ok" if st.session_state.correction_applied else "stat-chip"
         corr_text = "✓ Corregido" if st.session_state.correction_applied else "Original"
         cov_chip = "stat-chip stat-chip-ok" if coverage >= 95 else "stat-chip stat-chip-warn" if coverage >= 80 else "stat-chip"
@@ -1570,23 +977,6 @@ def main_app():
                 unsafe_allow_html=True
             )
 
-        # ── SEGMENTOS CON TIMESTAMPS (COLUMNA IZQUIERDA) ──
-        st.markdown("<div class='panel-header' style='margin-top:10px'>⏱️ Filtrar Segmentos</div>", unsafe_allow_html=True)
-
-        sq_left = st.text_input(
-            "seg_search",
-            placeholder="Escribe para buscar y filtrar segmentos...",
-            label_visibility="collapsed",
-            key="q_seg_left"
-        )
-
-        render_segment_viewer(
-            segs,
-            active_idx=st.session_state.active_segment_idx,
-            search_query=sq_left,
-            max_height="420px"
-        )
-
         if gaps:
             with st.expander(f"⚠️ {len(gaps)} huecos detectados", expanded=False):
                 for gap in gaps:
@@ -1596,389 +986,86 @@ def main_app():
                         unsafe_allow_html=True
                     )
 
-    # ── COLUMNA DERECHA: PESTAÑAS ──────────────────────────────────
+        st.markdown("---")
+        st.markdown("##### 📥 Exportar")
+        st.download_button("📄 Descargar transcripción (.txt)", data=txt,
+                           file_name=f"{fname_display}_transcripcion.txt", mime="text/plain",
+                           use_container_width=True)
+
+    # ── COLUMNA DERECHA: búsqueda avanzada + segmentos ──
     with right_col:
-        tab_busqueda, tab_entidades, tab_global, tab_chat, tab_analisis, tab_export = st.tabs([
-            "🔍 Búsqueda", "🏷️ Entidades", "🌐 Global", "💬 Chat IA", "📊 Análisis", "📥 Exportar"
-        ])
+        st.markdown("<div class='panel-header'>🔍 Buscar término y localizarlo en el audio</div>", unsafe_allow_html=True)
 
-        # ════════════════════════════════════════
-        # TAB: BÚSQUEDA
-        # ════════════════════════════════════════
-        with tab_busqueda:
-            def execute_search():
-                q = st.session_state.get("q_input", "").strip()
-                if q:
-                    st.session_state.last_search_query = q
-                    st.session_state._search_pending = True
+        query = st.text_input("buscar", placeholder="Ej: Comfenalco, junta directiva, presupuesto...",
+                              label_visibility="collapsed", value=st.session_state.search_query, key="search_box")
+        if query != st.session_state.search_query:
+            st.session_state.search_query = query
+            st.session_state.active_segment_idx = -1
 
-            sq1, sq2 = st.columns([5, 0.7])
-            with sq1:
-                st.text_input("q", placeholder="🔍 Buscar palabra o frase...", label_visibility="collapsed", key="q_input", on_change=execute_search)
-            with sq2:
-                if st.button("✕", key="clear_search", use_container_width=True):
-                    st.session_state.search_results = None
-                    st.session_state.last_search_query = ""
-                    st.rerun()
+        q_norm = norm(query)
+        q_words = [w for w in q_norm.split() if w]
 
-            if st.session_state.get("_search_pending"):
-                st.session_state.search_results = search_segments(
-                    st.session_state.last_search_query,
-                    st.session_state.transcript_segments,
-                    st.session_state.corrected_segments,
-                    context_words=ctx_w,
-                    fuzzy_thresh=fuzzy_t if use_fuzzy else 1.0
+        if query:
+            pattern, mode = determine_search_mode(query, segs)
+
+            results = []
+            for i, seg in enumerate(segs):
+                text = seg.get("text", "")
+                matched, html = highlight_and_check(text, pattern, q_words, fuzzy_t, mode)
+                if matched:
+                    results.append((i, seg, html))
+
+            if mode == "similar":
+                st.markdown(
+                    "<div class='similar-banner'>⚠️ No se encontraron coincidencias exactas para "
+                    f"<strong>{query}</strong>. Mostrando términos similares o variaciones (posibles errores de transcripción).</div>",
+                    unsafe_allow_html=True
                 )
-                st.session_state._search_pending = False
-
-            aq = st.session_state.last_search_query
-            res = st.session_state.search_results
-
-            if aq and res:
-                total_occ = count_occurrences(txt, aq)
-                st.caption(f"**{len(res)}** resultado{'s' if len(res) != 1 else ''} ({total_occ} ocurrencias) para **{aq}**")
-                for i, r in enumerate(res):
-                    badge_cls = f"sr-badge-{r.get('confidence', 'low')}"
-                    bh = f"<span class='sr-ctx'>...{r.get('before', '')} </span>" if r.get('before') else ""
-                    ah = f"<span class='sr-ctx'> {r.get('after', '')}...</span>" if r.get('after') else ""
-                    ctx = ""
-                    if r.get('prev_segment') or r.get('next_segment'):
-                        cp = []
-                        if r.get('prev_segment'):
-                            cp.append(f"<span class='sr-ctx'>↑ {highlight_html(r['prev_segment'], aq)}</span>")
-                        if r.get('next_segment'):
-                            cp.append(f"<span class='sr-ctx'>↓ {highlight_html(r['next_segment'], aq)}</span>")
-                        ctx = f"<div class='sr-segment-full'>{'<br>'.join(cp)}</div>"
-                    ts_btn = make_ts_button_html(max(0, r.get("start_time", 0) - 2), label=r.get('time_label', '0:00'))
-                    st.markdown(f"""<div class="sr-card"><div class="sr-head">{ts_btn}
-                        <span class="sr-time" style="margin-left:4px">{r.get('time_label', '')} → {r.get('end_label', '')}</span>
-                        <span class="sr-badge {badge_cls}">{r.get('confidence', 'low')}</span></div>
-                        <div class="sr-body">{bh}{r.get('match_hl', '')}{ah}</div>{ctx}</div>""", unsafe_allow_html=True)
-            elif aq and res is not None and len(res) == 0:
-                st.markdown('<div class="no-results-box">🔍 Sin resultados.</div>', unsafe_allow_html=True)
-
-            st.markdown("---")
-            st.markdown("##### 📄 Texto completo")
-            if aq:
-                t_count = count_occurrences(txt, aq)
-                if t_count > 0:
-                    st.caption(f"🔶 {t_count} ocurrencias resaltadas")
-            st.markdown(
-                f"<div class='full-text-box'>{highlight_full_text(txt, aq) if aq else txt}</div>",
-                unsafe_allow_html=True
-            )
-
-        # ════════════════════════════════════════
-        # TAB: ENTIDADES
-        # ════════════════════════════════════════
-        with tab_entidades:
-            ent_col1, ent_col2 = st.columns([1, 1])
-
-            with ent_col1:
-                st.markdown("<div class='panel-header'>🏷️ Extracción de Entidades</div>", unsafe_allow_html=True)
-
-                btn_col1, btn_col2 = st.columns(2)
-                with btn_col1:
-                    if st.button("🏷️ Extraer Entidades", type="primary", use_container_width=True):
-                        st.session_state.entities = None
-                        st.session_state._entities_error = None
-                        with st.spinner("Extrayendo entidades..."):
-                            extracted = extract_entities(client, txt)
-                        st.rerun()
-                with btn_col2:
-                    if st.button("📰 Generar Lead", use_container_width=True):
-                        st.session_state.lead_cache = None
-                        with st.spinner("Generando titular y lead..."):
-                            _ = generate_lead(client, txt, fname_display)
-                        st.rerun()
-
-                if st.session_state.get("_entities_error") and st.session_state.entities is not None:
-                    all_empty = all(len(v) == 0 for v in st.session_state.entities.values() if isinstance(v, list))
-                    if all_empty:
-                        st.markdown(
-                            f"<div class='ent-error-box'>⚠️ No se pudieron extraer entidades. "
-                            f"Intenta de nuevo.<br><small>{st.session_state._entities_error}</small></div>",
-                            unsafe_allow_html=True
-                        )
-
-                if st.session_state.entities is not None:
-                    all_empty = all(len(v) == 0 for v in st.session_state.entities.values() if isinstance(v, list))
-                    if not all_empty:
-                        st.markdown("---")
-                        render_entity_panel(st.session_state.entities)
-
-                if st.session_state.lead_cache:
-                    st.markdown("---")
-                    lead = st.session_state.lead_cache
-                    st.markdown(f"""
-                    <div class="lead-box">
-                        <div class="lead-label">📰 Titular</div>
-                        <div class="lead-titular">{lead.get('titular', '')}</div>
-                        <div class="lead-subtitular">{lead.get('subtitulo', '')}</div>
-                        <div class="lead-label">🔰 Lead</div>
-                        <div class="lead-body">{lead.get('lead', '')}</div>
-                        <div style="margin-top:10px">
-                            <div class="lead-label">🗂️ Contexto</div>
-                            <div class="lead-body">{lead.get('contexto', '')}</div>
-                        </div>
-                    </div>""", unsafe_allow_html=True)
-
-            with ent_col2:
-                st.markdown("<div class='panel-header'>📄 Transcripción con Entidades</div>", unsafe_allow_html=True)
-                view_mode = st.radio("Vista", ["Texto", "Segmentos"], horizontal=True,
-                                     label_visibility="collapsed", key="view_mode_ent")
-                if view_mode == "Texto":
-                    show_ents = st.checkbox("Resaltar entidades en texto", value=True, key="show_ents_check",
-                                            disabled=(st.session_state.entities is None))
-                    display_txt = txt
-                    if show_ents and st.session_state.entities:
-                        display_txt = highlight_entities_in_text(txt, st.session_state.entities)
-                    st.markdown(f"<div class='full-text-box'>{display_txt}</div>", unsafe_allow_html=True)
-                else:
-                    render_segment_viewer(segs, active_idx=st.session_state.active_segment_idx, max_height="560px")
-
-        # ════════════════════════════════════════
-        # TAB: GLOBAL
-        # ════════════════════════════════════════
-        with tab_global:
-            if len(hist) <= 1:
-                st.markdown('<div class="empty-state"><div class="empty-state-icon">🌐</div>'
-                            '<div class="empty-state-title">Agrega más audios</div>'
-                            '<div class="empty-state-text">Necesitas al menos 2 en sesión. Sube otro archivo desde el menú lateral expandido.</div></div>', unsafe_allow_html=True)
+                total_occ = len(results)
             else:
-                def execute_global_search():
-                    q = st.session_state.get("gq_input", "").strip()
-                    if q:
-                        st.session_state.last_global_query = q
-                        st.session_state._global_search_pending = True
-                    else:
-                        st.session_state.global_search_results = None
-                        st.session_state.last_global_query = ""
+                total_occ = count_exact_occurrences(txt, pattern)
 
-                st.text_input("gq", placeholder=f"Buscar en {len(hist)} archivos...", label_visibility="collapsed", key="gq_input", on_change=execute_global_search)
-
-                if st.session_state.get("_global_search_pending"):
-                    st.session_state.global_search_results = global_search(
-                        st.session_state.last_global_query, hist,
-                        fuzzy_thresh=fuzzy_t if use_fuzzy else 1.0
+            if results:
+                badge_cls = "sr-badge-exacta" if mode == "exacta" else "sr-badge-similar"
+                badge_txt = "exacta" if mode == "exacta" else "similar"
+                st.caption(f"**{len(results)}** segmento(s) con coincidencia" + (f" · {total_occ} ocurrencias" if mode == "exacta" else ""))
+                for i, seg, html in results:
+                    start_sec = float(seg.get("start", 0))
+                    ts_btn = make_ts_button_html(max(0, start_sec - 1))
+                    end_label = fmt_time(float(seg.get("end", 0)))
+                    st.markdown(
+                        f"""<div class="sr-card"><div class="sr-head">{ts_btn}
+                        <span class="sr-time" style="margin-left:4px">{fmt_time(start_sec)} → {end_label}</span>
+                        <span class="sr-badge {badge_cls}">{badge_txt}</span></div>
+                        <div class="sr-body">{html}</div></div>""",
+                        unsafe_allow_html=True
                     )
-                    st.session_state._global_search_pending = False
-
-                gres = st.session_state.global_search_results
-                gaq = st.session_state.last_global_query
-
-                if gaq and gres:
-                    st.caption(f"**{len(gres)}** resultados para **{gaq}**")
-                    by_file = {}
-                    for r in gres:
-                        by_file.setdefault(r.get("audio_name", "audio"), []).append(r)
-                    for fn, fres in by_file.items():
-                        with st.expander(f"📁 {fn} — {len(fres)} resultados", expanded=True):
-                            for i, r in enumerate(fres):
-                                bc = f"sr-badge-{r.get('confidence', 'low')}"
-                                bh = f"<span class='sr-ctx'>...{r.get('before', '')} </span>" if r.get('before') else ""
-                                ah = f"<span class='sr-ctx'> {r.get('after', '')}...</span>" if r.get('after') else ""
-                                gc1, gc2 = st.columns([0.8, 5])
-                                with gc1:
-                                    if st.button("▶ ir", key=f"gp_{fn}_{i}"):
-                                        aid = r.get("audio_id", "")
-                                        if aid != st.session_state.active_audio_id:
-                                            history_save_current()
-                                            history_load(aid)
-                                        jump_to_time(max(0, r.get("start_time", 0) - 2), r.get("idx", -1))
-                                        st.rerun()
-                                with gc2:
-                                    st.markdown(f'<div class="sr-card sr-card-global"><div class="sr-head"><span class="sr-time">{r.get("time_label", "")}</span><span class="sr-badge {bc}">{r.get("confidence", "low")}</span></div><div class="sr-body">{bh}{r.get("match_hl", "")}{ah}</div></div>', unsafe_allow_html=True)
-                elif gaq and gres is not None and len(gres) == 0:
-                    st.markdown('<div class="no-results-box">🔍 Sin resultados.</div>', unsafe_allow_html=True)
-
-                st.markdown("---")
-                st.markdown("##### 📚 Audios en sesión")
-                for h in hist:
-                    active = h["id"] == st.session_state.active_audio_id
-                    dur = fmt_duration(get_audio_duration(h.get("corrected_segments") or []))
-                    wc = len((h.get("transcript_text") or "").split())
-                    hc1, hc2, hc3 = st.columns([3, 1, 1])
-                    with hc1:
-                        st.markdown(f"<div class='hist-card {'active' if active else ''}'><div class='hist-card-name'>📁 {h.get('uploaded_filename', 'audio')}{' ← activo' if active else ''}</div><div class='hist-card-meta'>⏱ {dur} · {wc:,} palabras</div></div>", unsafe_allow_html=True)
-                    with hc2:
-                        if not active and st.button("Cargar", key=f"hl_{h['id']}"):
-                            history_save_current()
-                            history_load(h["id"])
-                            st.rerun()
-                    with hc3:
-                        if st.button("🗑", key=f"hd_{h['id']}"):
-                            st.session_state.audio_history = [x for x in st.session_state.audio_history if x["id"] != h["id"]]
-                            if active and st.session_state.audio_history:
-                                history_load(st.session_state.audio_history[-1]["id"])
-                            elif not st.session_state.audio_history:
-                                reset_current_audio()
-                                st.session_state.active_audio_id = None
-                            st.rerun()
-
-        # ════════════════════════════════════════
-        # TAB: CHAT IA
-        # ════════════════════════════════════════
-        with tab_chat:
-            if not st.session_state.chat_history:
-                st.markdown('<div class="empty-state" style="padding:20px"><div class="empty-state-icon">💬</div>'
-                            '<div class="empty-state-title">Pregunta sobre el audio</div>'
-                            '<div class="empty-state-text">Responde con timestamps y citas exactas</div></div>', unsafe_allow_html=True)
-            for msg in st.session_state.chat_history:
-                with st.chat_message(msg["role"]):
-                    st.markdown(msg["content"])
-            if user_prompt := st.chat_input("Pregunta sobre el audio..."):
-                st.session_state.chat_history.append({"role": "user", "content": user_prompt})
-                with st.chat_message("user"):
-                    st.markdown(user_prompt)
-                with st.chat_message("assistant"):
-                    ph = st.empty()
-                    full = ""
-                    try:
-                        segs_ctx = st.session_state.corrected_segments or st.session_state.transcript_segments or []
-                        ts_ctx = build_timestamped_transcript(segs_ctx)
-                        if len(ts_ctx) > 15000:
-                            ts_ctx = ts_ctx[:15000] + "\n[...truncado...]"
-                        ent_ctx = ""
-                        if st.session_state.entities:
-                            ent = st.session_state.entities
-                            ent_ctx = f"\n\nENTIDADES:\nPersonas: {', '.join(ent.get('personas', []))}\nOrganizaciones: {', '.join(ent.get('organizaciones', []))}\nLugares: {', '.join(ent.get('lugares', []))}"
-                        sys_p = (f"Eres un asistente periodístico. Responde SOLO con base en la transcripción.\n"
-                                 f"1. Solo información explícita.\n2. Incluye [MM:SS].\n"
-                                 f"3. Si no está: 'No encontré esa información.'\n4. NO inventes.\n"
-                                 f"\nTRANSCRIPCIÓN:\n{ts_ctx}{ent_ctx}")
-                        stream = client.chat.completions.create(
-                            model="llama-3.3-70b-versatile",
-                            messages=[
-                                {"role": "system", "content": sys_p},
-                                *[{"role": m["role"], "content": m["content"]} for m in st.session_state.chat_history[-6:]]
-                            ],
-                            stream=True, max_tokens=2048, temperature=0.1
-                        )
-                        for chunk in stream:
-                            if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
-                                full += chunk.choices[0].delta.content
-                                ph.markdown(full + "▌")
-                        ph.markdown(full)
-                        st.session_state.chat_history.append({"role": "assistant", "content": full})
-                    except Exception as ex:
-                        st.error(f"Error: {ex}")
-            if st.session_state.chat_history and st.button("🗑️ Limpiar conversación"):
-                st.session_state.chat_history = []
-                st.rerun()
-
-        # ════════════════════════════════════════
-        # TAB: ANÁLISIS
-        # ════════════════════════════════════════
-        with tab_analisis:
-            chars = len(txt)
-            sentences = len(re.split(r'[.!?]+', txt))
-            st.markdown(f"""<div class="kpi-grid">
-                <div class="kpi-card"><div class="kpi-value">{n_words:,}</div><div class="kpi-label">Palabras</div></div>
-                <div class="kpi-card"><div class="kpi-value">{sentences}</div><div class="kpi-label">Oraciones</div></div>
-                <div class="kpi-card"><div class="kpi-value">{chars:,}</div><div class="kpi-label">Caracteres</div></div>
-                <div class="kpi-card"><div class="kpi-value">{wpm}</div><div class="kpi-label">Pal/min</div></div>
-                <div class="kpi-card"><div class="kpi-value">{fmt_duration(duration)}</div><div class="kpi-label">Duración</div></div>
-                <div class="kpi-card"><div class="kpi-value">{coverage:.0f}%</div><div class="kpi-label">Cobertura</div></div>
-            </div>""", unsafe_allow_html=True)
-            st.markdown("---")
-            an1, an2 = st.columns(2)
-            with an1:
-                if st.button("📝 Resumen", use_container_width=True, type="primary"):
-                    with st.spinner("Generando..."):
-                        generate_summary(client, txt)
-                if "summary" in st.session_state.analysis_cache:
-                    with st.expander("📝 Resumen", expanded=True):
-                        st.markdown(st.session_state.analysis_cache["summary"])
-            with an2:
-                if st.button("🏷️ Temas", use_container_width=True, type="primary"):
-                    with st.spinner("Extrayendo..."):
-                        generate_topics(client, txt)
-                if "topics" in st.session_state.analysis_cache:
-                    with st.expander("🏷️ Temas", expanded=True):
-                        st.markdown(st.session_state.analysis_cache["topics"])
-            st.markdown("---")
-            an3, an4 = st.columns(2)
-            with an3:
-                if st.button("✅ Tareas y Decisiones", use_container_width=True):
-                    with st.spinner("Extrayendo..."):
-                        generate_action_items(client, txt)
-                if "actions" in st.session_state.analysis_cache:
-                    with st.expander("✅ Tareas", expanded=True):
-                        st.markdown(st.session_state.analysis_cache["actions"])
-            with an4:
-                if st.button("🎭 Análisis de Tono", use_container_width=True):
-                    with st.spinner("Analizando..."):
-                        generate_sentiment(client, txt)
-                if "sentiment" in st.session_state.analysis_cache:
-                    with st.expander("🎭 Tono", expanded=True):
-                        st.markdown(st.session_state.analysis_cache["sentiment"])
-            st.markdown("---")
-            st.markdown("##### 📈 Palabras más frecuentes")
-            words_clean = re.findall(r'\b[a-záéíóúñü]{3,}\b', txt.lower())
-            wf = {}
-            for w in words_clean:
-                if w not in STOPWORDS_ES:
-                    wf[w] = wf.get(w, 0) + 1
-            top = sorted(wf.items(), key=lambda x: x[1], reverse=True)[:20]
-            if top:
-                mx = top[0][1]
-                bars = "".join(
-                    f"<div class='wf-row'><span class='wf-word'>{w}</span><div class='wf-bar-bg'><div class='wf-bar-fill' style='width:{max((f/mx)*100, 5)}%'></div></div><span class='wf-count'>{f}</span></div>"
-                    for w, f in top
+            else:
+                st.markdown(
+                    f"<div class='no-results-box'>🔍 Sin resultados, ni siquiera aproximados, para '<strong>{query}</strong>'.</div>",
+                    unsafe_allow_html=True
                 )
-                st.markdown(bars, unsafe_allow_html=True)
+        else:
+            st.caption(f"Mostrando los {len(segs)} segmentos de la transcripción. Escribe un término para filtrar y saltar directamente a ese punto del audio.")
+            for i, seg in enumerate(segs):
+                start_sec = float(seg.get("start", 0))
+                ts_btn = make_ts_button_html(max(0, start_sec - 1))
+                end_label = fmt_time(float(seg.get("end", 0)))
+                st.markdown(
+                    f"""<div class="sr-card"><div class="sr-head">{ts_btn}
+                    <span class="sr-time" style="margin-left:4px">{fmt_time(start_sec)} → {end_label}</span></div>
+                    <div class="sr-body">{seg.get("text","")}</div></div>""",
+                    unsafe_allow_html=True
+                )
 
-        # ════════════════════════════════════════
-        # TAB: EXPORTAR
-        # ════════════════════════════════════════
-        with tab_export:
-            st.markdown("##### 📥 Exportar")
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                st.download_button("📄 Texto (.txt)", data=txt,
-                                   file_name=f"{fname_display}_transcripcion.txt", mime="text/plain", use_container_width=True)
-            with c2:
-                srt = []
-                for i, seg in enumerate(segs):
-                    s, e = float(seg.get("start", 0)), float(seg.get("end", 0))
-                    srt.extend([f"{i+1}",
-                                f"{int(s//3600):02d}:{int((s%3600)//60):02d}:{s%60:06.3f} --> {int(e//3600):02d}:{int((e%3600)//60):02d}:{e%60:06.3f}",
-                                seg.get("text", ""), ""])
-                st.download_button("🎬 Subtítulos (.srt)", data="\n".join(srt),
-                                   file_name=f"{fname_display}.srt", mime="text/plain", use_container_width=True)
-            with c3:
-                ts_lines = [f"[{fmt_time(float(seg.get('start', 0)))}] {seg.get('text', '')}" for seg in segs]
-                st.download_button("⏱️ Timestamps (.txt)", data="\n".join(ts_lines),
-                                   file_name=f"{fname_display}_timestamps.txt", mime="text/plain", use_container_width=True)
-            st.markdown("---")
-            c4, c5 = st.columns(2)
-            with c4:
-                json_data = {
-                    "filename": fname_display, "date": datetime.now().isoformat(),
-                    "duration_seconds": duration, "word_count": n_words,
-                    "coverage_percent": coverage, "entities": st.session_state.entities,
-                    "lead": st.session_state.lead_cache, "full_text": txt, "segments": segs
-                }
-                st.download_button("🗂️ JSON completo", data=json.dumps(json_data, ensure_ascii=False, indent=2),
-                                   file_name=f"{fname_display}.json", mime="application/json", use_container_width=True)
-            with c5:
-                if st.session_state.analysis_cache or st.session_state.lead_cache:
-                    ae = {"filename": fname_display, "lead": st.session_state.lead_cache,
-                          "entities": st.session_state.entities, "analyses": st.session_state.analysis_cache}
-                    st.download_button("📊 Análisis (.json)", data=json.dumps(ae, ensure_ascii=False, indent=2),
-                                       file_name=f"{fname_display}_analisis.json", mime="application/json", use_container_width=True)
-                else:
-                    st.button("📊 Análisis (.json)", disabled=True, use_container_width=True)
-            if len(hist) > 1:
-                st.markdown("---")
-                se = {
-                    "session_date": datetime.now().isoformat(), "total_audios": len(hist),
-                    "audios": [{"filename": h.get("uploaded_filename"), "full_text": h.get("transcript_text", ""),
-                                "lead": h.get("lead_cache"), "entities": h.get("entities")} for h in hist]
-                }
-                st.download_button("📦 Sesión completa (.json)", data=json.dumps(se, ensure_ascii=False, indent=2),
-                                   file_name="sesion_completa.json", mime="application/json", use_container_width=True)
+        st.markdown("---")
+        with st.expander("📄 Ver transcripción completa"):
+            if query:
+                pattern2, mode2 = determine_search_mode(query, segs)
+                _, full_html = highlight_and_check(txt, pattern2, q_words, fuzzy_t, mode2)
+            else:
+                full_html = txt
+            st.markdown(f"<div class='full-text-box'>{full_html}</div>", unsafe_allow_html=True)
 
 
 if __name__ == "__main__":
